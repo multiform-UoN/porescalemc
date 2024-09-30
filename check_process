@@ -1,0 +1,20 @@
+#!/bin/bash
+while true
+	do
+		pids=""
+		comma=" "
+		for var in "$@"
+			do
+				pidlist="$(pgrep ${var})"
+				for ppid in $pidlist
+				do
+					if [ -n "$ppid" ]; then
+						pids=$pids$comma"$(pgrep -P ${ppid})"
+						pids=$ppid$comma$pids
+					fi
+				done
+			done
+		pids="$(echo ${pids} | tr ' ' ,)"
+		echo $pids
+		htop -p $pids
+	done

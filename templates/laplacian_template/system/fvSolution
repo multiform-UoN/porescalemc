@@ -1,0 +1,67 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2.4.0                                 |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      fvSolution;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "tolerance"
+solvers
+{
+    T
+    {
+        solver          GAMG;
+        tolerance       1e-9;
+        relTol          1e-3;
+        minIter         3;              // a minimum number of iterations
+        maxIter         100;            // limitation of iterions number
+        smoother        FDIC;            // setting for GAMG
+        nPreSweeps      1;              // 1 for pd, set to 0 for all other!
+        nPostSweeps     2;              // 2 is fine
+        nFinestSweeps   2;              // 2 is fine
+        scaleCorrection true;           // true is fine
+        directSolveCoarsestLevel false; // false is fine
+        cacheAgglomeration on;          // on is fine; set to off, if dynamic
+                                        // mesh refinement is used!
+        nCellsInCoarsestLevel 200;      // 500 is fine,
+                                        // otherwise sqrt(number of cells)
+        agglomerator    faceAreaPair;
+        mergeLevels     1;
+    }
+
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 0;
+
+    residualControl
+    {
+        T               $tol;
+    }
+}
+
+laplacianFlow
+{
+    TRefCell                 1;
+    TRefValue                0;
+    nNonOrthogonalCorrectors 50;
+    residualControl
+	    {
+		        T           $tol;
+	    }
+}
+
+
+
+// ************************************************************************* //

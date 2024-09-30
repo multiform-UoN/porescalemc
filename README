@@ -1,0 +1,124 @@
+MATTEO ICARDI (with G. Boccardo, H. Hoel, N. Quadrio)
+November 2013 - March 2015
+-------------------------------------------------------
+Multilevel Monte Carlo for flow simulations on random porous media geometries
+------------------------------------------------------
+
+PLEASE CITE doi:10.1016/j.advwatres.2016.01.004
+
+Code released under GPL license
+
+------------------------------------------------------
+folder literature: relevant papers on mlmc, random geometry, packings and others
+
+folder code_dev: development version (new things go here)
+subfolder Dict: input files to run the code (dictionary files)
+
+folder script: various scripts to run and manage the code at a higher level
+
+folder code: main python code (only tested and stable things go here)
+subfolder Dict: input files to run the code (dictionary files)
+
+code files:
+*template             = OPENFOAM and GMSH predefined cases, all options about numerical schemes and other things are there
+run.py                = main file to run with python3 (customizable by the user)
+bsand.py              = module for virtual deposition process
+randomgeo.py          = module for random geometry generation
+single.py             = module for runnning single simulations or parametric studies
+mlmc.py               = module for running MC or MLMC estimation
+openfoam.py           = module for loading OpenFOAM
+gmshgetdp             = module for running GETDP
+packing.py            = module for statistical analysis of packings, used as a solver (no PDE though)
+general.py            = general include file for all the modules
+*Default.py           = default values for Dict files. If a *Dict.py file is present in the folder they are overwritten
+                        NB: the Default files are just symbolic links to the *Dict files in the code/Dict folder
+other files:
+compute_porosity.pvsm = ParaView state file to compute effective porosity of a certain sample (moved to OF template folder)
+qoi.sh                = bash script to extract a quantity of interest from the OpenFOAM log file
+store_case.sh         = bash script to backup all the log files and folders of a specified testcase
+clear_case.sh         = bash script to remove all simulation data from the folders
+monitorResiduals      = gnuplot script to plot residuals from OpenFOAM log file (moved to OF template folder)
+
+------------------------------------------------------------
+
+Usage overview:
+The code has be developed in a modular way.
+Almost each module can be imported and used autonomously however the full usage is meant to be through the run.py main file 
+
+Introduction:
+- Take a look at run/run.sh for running the code
+- Take a look at the dictionaries to see all the options available
+- Take a look at run.py to change the main routine and customize the analysis
+
+To run the code:
+Either use the script run.sh (editing it accordingly) or follow these steps:
+1 - create a work folder with the setup.sh script
+3 - Customize all the options in the dictionaries and the run.sh script 
+4 - Setup Blender, OpenFOAM or GMSH in the PATH and their custom internal properties (or add it in run.sh)
+5 - run the script run.sh (or run.py with "python -u" or "ipython", after you have set all the environmental variables, see the run.sh bash file for an example)
+
+Requisites:
+- OpenFOAM-2.3 or later (with previous versions you should replace the file searchableSphere.C to fix a bug)
+- for multiphase simulations (comp2phase) need OF 2.3, swak4Foam and some extra OF functionalities developed by me (Matteo)
+- For elliptic PDEs GMSH and GETDP recent versions and added in the PATH
+- For complex packings Blender > 2.68
+- python3 with all scientific modules (random, numpy, matplotlib, etc). It is suggested to use Anaconda from Continuum Analytics. Install the 3.x version 
+- For clusters and distibuted computing, an environment variable $HOSTFILE should point to a file with the list of hosts
+
+Suggested system setup:
+- add the following lines to your .profile or .bashrc file
+export MLMC_PORESCALE=~/porescalemc
+export PYTHONPATH=$PYTHONPATH:$MLMC_PORESCALE/code
+alias setup_mlmc_testcase=$MLMC_PORESCALE/script/setup.sh
+------------------------------------------------------------------------------------
+
+TO-DO LIST IMPORTANT (FIXINGS, DEVELOPMENTS TO BE COMPLETED):
+- implement adaptive stopping and checking Aitken method once more
+- implement aitken or other extrapolation also for the levels to reduce bias
+- check gmsh solvers and modify accordingly also packing solver (recent changes in the definition of set_input and setup)
+- re-check all formula for QoI and function objects
+- add wallbcs based on openfoamDict entry also in other solvers (now only in steadyNS)
+
+Future developments (big things):
+- add parametric studies to single.py
+- Implement the coupling with Fenics (Haakon)
+- Add other equations (in OF, GETDP and Fenics) and other post-processing QoIs
+- packing analysis study module: add better porosity estimation, implement surface area estimation, two-point correlation and other stuff
+
+General to-do list (small things):
+- Rewrite the QoI processing by avoiding writing files and, if possible, avoid also writing simulations setups
+- Reorganize debug output, log files and input/output using logging module
+- look in the code for the keyword "TODO"
+- 2D for GMSH/GETDP is not implemented. 2D for OpenFOAM should be checked again
+- check the implementation of mlmc_hybrid to parallelize with supercomputers (mixed mpi and multiprocessing with rpyc)
+- manage more exceptions (code not converging, geometry not connected, NaN, etc....)
+
+randomgeo.py to-do list:
+- compute approximate porosity from pair-distance matrix
+- add preferential orientation for ellipsoids
+- add shrinking/growing factor to improve packing algorithm and to simulate low porosity media (only OpenFOAM)
+- finish and check Nathan's development on heterogeneities
+
+bsand.py to-do list:
+- add ellipsoids and random rotation (already done for randomgeo, just copy it)
+- add other primitives
+- perform sampling of grains on pre-defined model sets
+- add random roughness
+- separate container STL from grain STL to impose different BCs
+
+mlmc.py to-do list:
+- extrapolate Q and the constant in the convergence rate from Q_l (Richardson extrapolation)
+- propose a robust way to estimate alpha,beta and gamma and use them in the stopping criterium and in the optimal number of samples for new levels (see CMLMC of Abdo)
+- propose an automatic way to deal with multi-index refinement instead of increasing/decreasing all parameters at the same time
+
+-------------------------------------------------------------------------
+
+References:
+- Icardi et al. (2016 AdWR, 2015 ??)
+- Abdul-Lateef Haji-Ali et al., Continuation Multilevel Monte Carlo, Multi-index Monte Carlo
+- Hakon Hoel's note
+- Nathan Quadrio's master thesis (PoliTo and KAUST)
+- Luigi Del Plato's master thesis (PoliTo)
+- Eleonora Crevacore's master thesis (PoliTo)
+- Icardi et. al., PRE, 2014
+

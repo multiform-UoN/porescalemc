@@ -1,0 +1,116 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2.4.0                                 |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "domainsize"
+
+convertToMeters $scalegrid;
+
+vertices
+(
+    ($xout $y1 $z1)
+    ($x2 $y1 $z1)
+    ($x2 $y2 $z1)
+    ($xout $y2 $z1)
+    ($xout $y1 $z2)
+    ($x2 $y1 $z2)
+    ($x2 $y2 $z2)
+    ($xout $y2 $z2)
+);
+
+blocks
+(
+    hex (0 1 2 3 4 5 6 7) ($xgridout $ygrid $zgrid) simpleGrading (1 1 1)
+);
+
+edges
+(
+);
+
+boundary
+(
+    maxY
+    {
+        type $lateralbcmesh;
+        neighbourPatch minY;
+       // transform       noOrdering;
+        faces
+        (
+            (3 7 6 2)
+        );
+    }
+
+    minX
+    {
+        type $inletbcmesh;
+        neighbourPatch maxX;
+       // transform       noOrdering;
+        faces
+        (
+            (0 4 7 3)
+        );
+    }
+
+    maxX
+    {
+        type $outletbcmesh;
+        neighbourPatch minX;
+       // transform       noOrdering;
+        faces
+        (
+            (2 6 5 1)
+        );
+    }
+
+    minY
+    {
+        type $lateralbcmesh;
+        neighbourPatch maxY;
+       // transform       noOrdering;
+        faces
+	(
+            (1 5 4 0)
+        );
+    }
+
+    minZ
+    {
+        type $lateralbcmesh;
+        neighbourPatch maxZ;
+       // transform       noOrdering;
+        faces
+        (
+            (0 3 2 1)
+        );
+    }
+
+    maxZ
+    {
+        type $lateralbcmesh;
+        neighbourPatch minZ;
+       // transform       noOrdering;
+        faces
+        (
+            (4 5 6 7)
+        );
+    }
+);
+
+mergePatchPairs
+(
+);
+
+// ************************************************************************* //

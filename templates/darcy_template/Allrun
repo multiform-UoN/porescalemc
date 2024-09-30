@@ -1,0 +1,39 @@
+#!/bin/bash
+cd ${0%/*} || exit 1    # run from this directory
+
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+# Get application name
+application=`getApplication`
+
+blockMesh &> log.pre
+decomposePar &>> log.pre
+
+nproc=$(echo processor* | wc -w)
+
+if [ $nproc != "1" ]
+then
+  prefix="mpirun -np $nproc"
+  suffix="-parallel"
+else
+  prefix=""
+  suffix=""
+fi
+
+cp -r 0_3d 0
+if [ $nproc != "1" ]
+then
+	for i in proc*; do cp -r 0 pressure contactangle time $i/; done
+fi
+
+if [ $1 != "None" ]
+then
+  $prefix mapFields ../$1 $suffix -sourceTime latestTime &>> log.pre
+fi
+
+[ -e ../dynamicCode ] && cp -r ../dynamicCode .
+$prefix $application $suffix &>> log
+[ -e ../dynamicCode ] || cp -r dynamicCode ../
+touch paraview.foam
+
+# ----------------------------------------------------------------- end-of-file

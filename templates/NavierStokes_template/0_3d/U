@@ -1,0 +1,50 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2.4.0                                 |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    location    "0";
+    object      U;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "../pressure"
+
+dimensions      [0 1 -1 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    #include "${WM_PROJECT_DIR}/etc/caseDicts/setConstraintTypes"
+    ".*(Y|Z)"
+    {
+        type            $lateralbcprim;
+        value           uniform ($lateralbcval 0 0);
+    }
+    minX
+    {
+        type            $inletbcprim;
+        value           uniform ($inletbcval 0 0);
+    }
+    maxX
+    {
+        type            $outletbcprim;
+        value           uniform ($outletbcval 0 0);
+    }
+    pores
+    {
+        type            $poresbcprim;
+        value           uniform ($poresbcval 0 0);
+    }
+}
+
+
+// ************************************************************************* //
