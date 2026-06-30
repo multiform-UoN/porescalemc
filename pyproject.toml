@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "porescalemc"
+version = "0.1.0"
+description = "Multilevel Monte Carlo for pore-scale UQ with random sphere/ellipsoid packings"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-cov"]
+plot = ["matplotlib>=3.7"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["porescalemc*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,692 @@
+\PassOptionsToPackage{final}{graphicx}
+\documentclass[preprint,12pt]{elsarticle}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm,amsfonts}
+\usepackage{booktabs}
+\usepackage{dcolumn}
+\usepackage{multirow}
+\usepackage[ruled]{algorithm2e}
+\usepackage[usenames,dvipsnames,svgnames,table]{xcolor}
+\usepackage{fullpage,lmodern}
+\usepackage{verbatim}
+\usepackage{lineno}
+\usepackage{hyperref}
+
+\journal{PoreScaleMC Theoretical Manual}
+
+% -------------------
+% ---- NOTATION
+% ------------------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\D}{\mathbb{D}}
+\newcommand{\K}{\mathbb{K}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\n}{\mathbf{n}}
+\newcommand{\x}{\mathbf{x}}
+\newcommand{\y}{\mathbf{y}}
+\newcommand{\uvec}{\mathbf{u}}
+\newcommand{\kvec}{\mathbf{k}}
+\newcommand{\cvec}{\mathbf{c}}
+\newcommand{\bfu}{\mathbf{u}}
+\newcommand{\X}{\mathbf{X}}
+\newcommand{\F}{\mathbf{F}}
+\newcommand{\B}{\mathbf{B}}
+\newcommand{\J}{\mathbf{J}}
+\newcommand{\qoi}{Q}
+\newcommand{\maxl}{L}
+\newcommand{\suml}{\sum_{\ell=1}^{\maxl}}
+\newcommand{\summ}{\frac{1}{M}\sum_{m=1}^{M}}
+\newcommand{\summl}{\frac{1}{M_{\ell}}\sum_{m=1}^{M_{\ell}}}
+\newcommand{\summz}{\frac{1}{M_{0}}\sum_{m=1}^{M_{0}}}
+\newcommand{\weakrate}{\alpha}
+\newcommand{\strongrate}{\beta}
+\newcommand{\workrate}{\gamma}
+
+\newcommand{\E}[1]{{\ensuremath{\mathrm{E}}\mspace{-2mu}\left[#1\right]}}
+\newcommand{\V}[1]{{\ensuremath{\mathrm{Var}}\mspace{-2mu}\left[#1\right]}}
+\newcommand{\Prob}[1]{{\ensuremath{\mathrm{P}}\mspace{-2mu}\left(#1\right)}}
+
+\begin{document}
+
+\begin{frontmatter}
+
+\title{PoreScaleMC: Theoretical and Mathematical Manual for Pore-Scale Multilevel Monte Carlo Modeling of Porous Media}
+
+\thanks{This manual supersedes and extends the theoretical sections of the 2016 \textit{Advances in Water Resources} paper by Icardi et al. It documents both the original vision and the current pure-Python implementation.}
+
+\author{Matteo Icardi}
+\ead{matteo.icardi@gmail.com}
+\author{Siarhei Khirevich}
+\author{Ra\'ul Tempone}
+\author{Gianluca Boccardo}
+
+\begin{abstract}
+This document serves as the self-consistent theoretical and mathematical manual for the \texttt{porescalemc} framework (current pure-Python implementation). We provide a rigorous, formula-heavy description of the underlying models: the Multilevel Monte Carlo (MLMC) estimator, hierarchical random packings of spheres and oriented ellipsoids, analytical Fourier representation of solid phases, cheap algebraic and Fourier-derived quantities of interest, and the clean solver abstraction layer. The material is sufficient to understand, extend, and trust both the mathematics and the corresponding implementation in \texttt{porescalemc/}.
+\end{abstract}
+
+\begin{keyword}
+Pore-scale simulation \sep Multilevel Monte Carlo \sep Random packings \sep Ellipsoids \sep Analytical Fourier methods \sep Uncertainty quantification
+\end{keyword}
+
+\end{frontmatter}
+
+\section{Introduction}
+\label{sec:intro}
+
+Pore-scale modeling has emerged as a cornerstone of digital rock physics (DRP) and porous media analysis \citep{blunt2013pore}. However, the high-fidelity simulation of fluid flow and transport processes within complex, stochastic microstructures introduces significant computational challenges. Traditional Monte Carlo (MC) methods require a prohibitive number of fine-grid realizations to reduce statistical sampling errors, rendering uncertainty quantification (UQ) practically infeasible. 
+
+To address this bottleneck, the Multilevel Monte Carlo (MLMC) method \citep{giles2008multilevel, cliffe2011multilevel} exploits a hierarchy of discretization resolutions, allocating most of the computational effort to inexpensive, coarse-grid simulations and running only a few fine-grid realizations to correct the discretization bias. 
+
+This manual details the complete mathematical and physical theory behind the \texttt{porescalemc} package (pure-Python rewrite). We outline:
+\begin{enumerate}
+    \item The MLMC estimator, optimal sample allocation, convergence criteria, and bias reduction via Richardson extrapolation.
+    \item The geometric representation of spherical and oriented ellipsoidal grains, including Haar measure orientation sampling and support function stretching lengths.
+    \item The sequential random addition (RSA) and Jodrey-Tory compaction algorithms (with optional attraction phase).
+    \item Analytical Fourier transform formulations of solid indicator fields (including exact ellipsoid FT), FFT smoothing kernels (unit-DC Gaussian and cell averaging), structure factor, and correlation length.
+    \item Algebraic packing statistics and Fourier-derived QoIs (porosity field mean, upscaled permeability via harmonic averaging of closure laws).
+    \item The clean \texttt{SolverProtocol} abstraction that decouples geometry from QoI computation, enabling both cheap algebraic/Fourier surrogates and future coupling to external high-fidelity PDE solvers.
+    \item Deterministic name-based sampling that guarantees identical random realizations for coarse/fine MLMC pairs.
+    \item Sequence acceleration via Aitken delta-squared process.
+\end{enumerate}
+
+The current implementation provides a self-contained pure-Python core focused on geometry generation and inexpensive QoIs. It is designed so that expensive external solvers (OpenFOAM, GetDP, etc.) can be plugged in later via the protocol without changing the MLMC engine.
+
+\section{Multilevel Monte Carlo (MLMC) Theory}
+\label{sec:mlmc}
+
+Let $\qoi$ be a scalar quantity of interest (QoI) computed from a pore-scale PDE solution on a stochastic domain $\Omega(\omega)$, where $\omega$ denotes a random event. We seek to estimate its expected value $\E{\qoi}$. 
+
+\subsection{Telescopic Decomposition and Estimator}
+We introduce a hierarchy of numerical approximations $\qoi_0, \qoi_1, \dots, \qoi_\maxl$ corresponding to discretization levels $\ell = 0, \dots, \maxl$ with increasing accuracy and computational cost. By exploiting the linearity of the expectation, we write $\E{\qoi_\maxl}$ as the telescopic sum:
+\begin{equation}
+\E{\qoi_\maxl} = \E{\qoi_0} + \sum_{\ell=1}^{\maxl} \E{\qoi_\ell - \qoi_{\ell-1}}
+\end{equation}
+The MLMC estimator $\widehat{\qoi}_{\text{ML}}$ approximates each term with an independent Monte Carlo average:
+\begin{equation}
+\label{eq:mlmc_estimator}
+\widehat{\qoi}_{\text{ML}} = \frac{1}{M_0} \sum_{i=1}^{M_0} \qoi_0^{(i)} + \sum_{\ell=1}^{\maxl} \frac{1}{M_\ell} \sum_{i=1}^{M_\ell} \left( \qoi_\ell^{(i)} - \qoi_{\ell-1}^{(i)} \right)
+\end{equation}
+where $M_\ell$ is the number of samples at level $\ell$, and the pairs $(\qoi_\ell^{(i)}, \qoi_{\ell-1}^{(i)})$ are evaluated using the same random realization $\omega^{(i)}$ of the geometry. This correlation is crucial as it significantly reduces the variance of the level differences $d\qoi_\ell = \qoi_\ell - \qoi_{\ell-1}$.
+
+\subsection{Asymptotic Convergence Rates}
+The performance of MLMC is governed by three asymptotic rates with respect to the level parameter $h_\ell$ (e.g., the grid spacing at level $\ell$, where $h_\ell = h_0 \cdot 2^{-\ell}$):
+\begin{itemize}
+    \item \textbf{Weak convergence rate ($\weakrate$)}: Governs the decay of the bias:
+    \begin{equation}
+    |\E{\qoi_\ell - \qoi}| \le C_1 h_\ell^{\weakrate}
+    \end{equation}
+    \item \textbf{Strong convergence rate ($\strongrate$)}: Governs the decay of the difference variance:
+    \begin{equation}
+    \V{\qoi_\ell - \qoi_{\ell-1}} \le C_2 h_\ell^{\strongrate}
+    \end{equation}
+    \item \textbf{Work growth rate ($\workrate$)}: Governs the increase in computational cost per sample:
+    \begin{equation}
+    W_\ell \le C_3 h_\ell^{-\workrate}
+    \end{equation}
+\end{itemize}
+The MLMC estimator yields optimal complexity when $\strongrate > \workrate$, making the total work to achieve a mean square error (MSE) of $\text{tol}^2$ independent of the finest level solver cost \citep{giles2008multilevel}.
+
+\subsection{Giles Optimal Sample Allocation}
+To minimize the total computational cost $\sum_{\ell=0}^{\maxl} M_\ell W_\ell$ subject to a variance constraint on the estimator:
+\begin{equation}
+\V{\widehat{\qoi}_{\text{ML}}} = \sum_{\ell=0}^{\maxl} \frac{\V{d\qoi_\ell}}{M_\ell} \le \frac{1}{2} (1 - \theta)^2 \text{tol}^2 \bar{\qoi}^2
+\end{equation}
+where $\bar{\qoi}$ is the magnitude of the estimator (used to define a relative tolerance) and $\theta \in (0,1)$ splits the tolerance between bias and statistical error. Using Lagrange multipliers, the optimal sample counts are:
+\begin{equation}
+\label{eq:giles_allocation}
+M_\ell = \left\lceil \left( \frac{z_\alpha}{(1 - \theta) \text{tol} \cdot \bar{\qoi}} \right)^2 \sqrt{\frac{\V{d\qoi_\ell}}{W_\ell}} \sum_{\ell'=0}^{\maxl} \sqrt{\V{d\qoi_{\ell'}} W_{\ell'}} \right\rceil
+\end{equation}
+where $z_\alpha$ is the normal quantile at the confidence level $1-\alpha$ (e.g., $z_\alpha \approx 2.58$ for a $99\%$ confidence interval, such that $\Prob{|\widehat{\qoi}_{\text{ML}} - \E{\qoi}| \le \text{tol}} \ge 1-\alpha$).
+
+\subsection{Bias Estimation and Convergence Check}
+The numerical bias $B_\maxl = \E{\qoi - \qoi_\maxl}$ can be estimated using two different modes:
+\begin{enumerate}
+    \item \textbf{Last Increment Mode} (\texttt{bias\_mode = "last\_increment"}):
+    This is the default approach which assumes a first-order convergence rate ($\weakrate = 1.0$) and uses the last-level increment as a direct proxy for the bias:
+    \begin{equation}
+    \text{Bias}_\maxl \approx \E{d\qoi_\maxl} = \E{\qoi_\maxl - \qoi_{\maxl-1}}
+    \end{equation}
+    
+    \item \textbf{Adaptive Bias Mode} (\texttt{bias\_mode = "adaptive"}):
+    This mode estimates the actual weak convergence rate $\weakrate$ dynamically from the last two levels on-the-fly:
+    \begin{equation}
+    2^{-\weakrate} \approx \frac{|\E{d\qoi_\maxl}|}{|\E{d\qoi_{\maxl-1}}|}
+    \end{equation}
+    By substituting this estimated rate into the geometric sum remainder for the bias, we obtain:
+    \begin{equation}
+    \text{Bias}_\maxl \approx \frac{|\E{d\qoi_\maxl}|}{2^\weakrate - 1} = \frac{|\E{d\qoi_\maxl}|^2}{|\E{d\qoi_{\maxl-1}}| - |\E{d\qoi_\maxl}|}
+    \end{equation}
+    To prevent division by zero or negative bias estimates due to random fluctuations, a safe fallback is applied pointwise for each component $k$:
+    \begin{equation}
+    (\text{Bias}_\maxl)_k \approx \begin{cases}
+    \text{sign}(\E{d\qoi_\maxl})_k \cdot \frac{|(\E{d\qoi_\maxl})_k|^2}{|(\E{d\qoi_{\maxl-1}})_k| - |(\E{d\qoi_\maxl})_k|} & \text{if } |(\E{d\qoi_{\maxl-1}})_k| - |(\E{d\qoi_\maxl})_k| > 10^{-9} \\
+    (\E{d\qoi_\maxl})_k & \text{otherwise}
+    \end{cases}
+    \end{equation}
+\end{enumerate}
+
+Additionally, Richardson extrapolation can be applied to the last two levels if \texttt{extrapolate\_bias = True} to reduce the bias and correct the estimator:
+\begin{equation}
+\widehat{\qoi}_{\text{ML, Richardson}} = \widehat{\qoi}_{\text{ML}} + \frac{\E{d\qoi_\maxl}}{2^\weakrate - 1}
+\end{equation}
+with the remaining bias then set to zero. The MLMC algorithm converges when both the estimated bias and statistical error fall below their respective split tolerances:
+\begin{equation}
+\frac{|\text{Bias}_\maxl|}{\bar{\qoi}} < \theta \cdot \text{tol}, \quad \text{and} \quad \frac{\text{StatError}}{\bar{\qoi}} < (1 - \theta) \cdot \text{tol}
+\end{equation}
+If the bias condition is violated, the finest level $\maxl$ is incremented, and new sample allocations are computed.
+
+\subsection{Hierarchical Refinement Strategies}
+Different physical parameters can be refined across MLMC levels using a string descriptor (e.g., ``g'', ``dgs'', ``gn''):
+\begin{itemize}
+    \item \texttt{g}: grid / discretization refinement (affects Fourier resolution or future PDE mesh size).
+    \item \texttt{d}: domain size scaling ($L \propto 2^\ell$).
+    \item \texttt{s}: grain (stone) size scaling ($\mu \propto 2^{-\ell \cdot 2/3}$ typical).
+    \item \texttt{n}: number of grains scaling.
+\end{itemize}
+The function \texttt{hierarchy\_level} computes the appropriately scaled \texttt{PackingConfig} for a given level and base configuration. This enables multi-fidelity hierarchies that combine geometric coarsening with discretization refinement.
+
+\subsection{Deterministic Name-Based Sampling for Correlated Pairs}
+A critical requirement for efficient MLMC is that the random geometry realization $\omega$ used for $\qoi_\ell$ and $\qoi_{\ell-1}$ must be \textit{identical}. The implementation achieves this by deriving a reproducible pseudo-random state from a human-readable sample ``name'' (e.g., ``demo\_l02\_000042''). The geometry factory is always called as \texttt{geometry\_factory(level, name, scaled\_config)}. The \texttt{PairSampler} class explicitly re-uses the exact same name when constructing the coarse and fine members of each pair. This guarantees perfect correlation without storing full random states or seeds.
+
+\section{Random Geometry Representation and Sampling}
+\label{sec:geometry}
+
+The porous medium is constructed by placing solid grains inside a periodic or bounded box $\mathcal{B} = [-L_x/2, L_x/2] \times [-L_y/2, L_y/2] \times [-L_z/2, L_z/2]$.
+
+\subsection{Sphere and Ellipsoid Parameterization}
+Grains are defined as closed subsets of $\R^3$:
+\begin{itemize}
+    \item \textbf{Sphere}: Parameterized by center $\cvec \in \R^3$ and radius $R > 0$:
+    \begin{equation}
+    S(\cvec, R) = \{ \x \in \R^3 \mid \|\x - \cvec\|_2 \le R \}
+    \end{equation}
+    \item \textbf{Oriented Ellipsoid}: Parameterized by center $\cvec \in \R^3$ and a non-singular $3 \times 3$ transformation matrix $M \in \R^{3 \times 3}$. The ellipsoid is the image of the unit ball under the affine transformation $\x = M\uvec + \cvec$:
+    \begin{equation}
+    E(\cvec, M) = \{ \x \in \R^3 \mid \| M^{-1} (\x - \cvec) \|_2 \le 1 \}
+    \end{equation}
+    The column vectors of $M$ represent the conjugate semi-axes. The lengths of the principal semi-axes $r_a, r_b, r_c$ are the Euclidean norms of the columns of $M$. The volume of the ellipsoid is exactly
+\[
+V_E = \frac{4}{3}\pi |\det(M)|.
+\]
+\end{itemize}
+
+\subsection{Uniform Orientation Sampling (Haar Measure)}
+To sample a uniformly distributed orientation matrix $M$ for an ellipsoid with prescribed semi-axes $\mathbf{r} = [r_a, r_b, r_c]^T$, we draw a random rotation matrix $Q \in \text{SO}(3)$ using the Haar measure \citep{ozols2009haar}:
+\begin{enumerate}
+    \item Generate a random $3 \times 3$ matrix $A$ with independent standard normal entries $A_{ij} \sim \mathcal{N}(0, 1)$.
+    \item Compute the QR decomposition: $A = QR$.
+    \item Normalise signs to ensure uniqueness and proper rotation:
+    \begin{equation}
+    Q \leftarrow Q \cdot \text{diag}(\text{sign}(\text{diag}(R)))
+    \end{equation}
+    If $\det(Q) < 0$, multiply the first column by $-1$.
+    \item Set $M = Q \cdot \text{diag}(\mathbf{r})$.
+\end{enumerate}
+
+\subsection{Stretching Length and Normalized Distance}
+To detect overlaps and guide grain displacements, we define the \textit{stretching length} (or support function) $h_g(\n)$ of a grain $g$ along a unit direction vector $\n \in \R^3$ ($\|\n\|_2 = 1$):
+\begin{equation}
+\label{eq:stretching_length}
+h_g(\n) = \sup_{\y \in g - \cvec} \y \cdot \n
+\end{equation}
+\begin{itemize}
+    \item For a sphere: $h_S(\n) = R$.
+    \item For an ellipsoid: $h_E(\n) = \| M^T \n \|_2$.
+\end{itemize}
+The normalized center-to-surface distance $d_{ij}$ between two grains $g_i$ and $g_j$ is given by:
+\begin{equation}
+\label{eq:norm_distance}
+d_{ij} = \frac{\| \cvec_j - \cvec_i \|_{\text{periodic}}}{h_i(\n_{ij}) + h_j(\n_{ij})}
+\end{equation}
+where $\n_{ij}$ is the unit displacement vector:
+\begin{equation}
+\n_{ij} = \frac{\cvec_j - \cvec_i}{\|\cvec_j - \cvec_i\|}
+\end{equation}
+Under periodic boundary conditions, the minimum-image convention is used:
+\begin{equation}
+\cvec_j - \cvec_i \leftarrow (\cvec_j - \cvec_i) - \mathbf{L} \circ \text{round}\left( \frac{\cvec_j - \cvec_i}{\mathbf{L}} \right)
+\end{equation}
+with $\mathbf{L} = [L_x, L_y, L_z]^T$ and $\circ$ denoting the Hadamard product. Two grains overlap if and only if $d_{ij} < 1$.
+
+\subsection{Sequential Random Addition (RSA)}
+Grains are placed sequentially. At each step, a radius $R$ (or ellipsoid semi-axes vector $\mathbf{r}$) is drawn from a particle size distribution (PSD):
+\begin{itemize}
+    \item \textbf{Lognormal PSD}: Parameterized by mean $\mu$ and coefficient of variation $cv = \sigma/\mu$. The underlying normal parameters are:
+    \begin{equation}
+    \sigma_{\ln}^2 = \ln(cv^2 + 1), \quad \mu_{\ln} = \ln(\mu) - \frac{1}{2} \sigma_{\ln}^2
+    \end{equation}
+    \item \textbf{Uniform PSD}: $R \sim \mathcal{U}(\max(10^{-10}, \mu(1-cv)), \mu(1+cv))$.
+    \item \textbf{Constant PSD}: $R = \mu$.
+\end{itemize}
+The center $\cvec$ is sampled uniformly. If the grain does not overlap any existing grain ($d_{ij} \ge 1$ for all placed $g_j$) and satisfies the boundary margin:
+\begin{equation}
+|c_\alpha| \le \frac{L_\alpha}{2} - d_{\text{bc}} h_g(\mathbf{e}_\alpha), \quad \alpha \in \{x, y, z\}
+\end{equation}
+it is accepted. The process halts when a target solid fraction or maximum number of attempts is reached.
+
+\subsection{Algebraic Packing QoIs}
+The \texttt{PackingStatsSolver} provides inexpensive descriptors directly from the grain list (no PDE solve required):
+\begin{itemize}
+    \item Porosity / solid fraction.
+    \item Number density $n = N / V$.
+    \item Specific surface area $S_v = \sum A_i / V$.
+    \item Equivalent-radius statistics (mean and coefficient of variation).
+    \item Nearest-neighbour centre distance and normalized gap statistics (using the same stretching-length distance).
+\end{itemize}
+These are used as default cheap QoIs for development, testing, and the lowest MLMC levels.
+
+\section{Jodrey-Tory Compaction Algorithm}
+\label{sec:jodrey_tory}
+
+For dense packings, sequential addition is followed by the Jodrey-Tory algorithm \citep{jodrey1985computer}, which iteratively resolves overlaps.
+
+\subsection{Overlap Resolution Phase}
+In each iteration, the pairwise normalized distance $d_{ij}$ is computed for all grains. Grains are identified as overlapping if $d_{ij} < d_{\text{min}}$, where $d_{\text{min}}$ is the target normalized gap. For the most overlapping pairs, the centers are pushed apart along the line of centers:
+\begin{equation}
+\cvec_i \leftarrow \cvec_i - \frac{1}{2} \Delta \n_{ij}, \quad \cvec_j \leftarrow \cvec_j + \frac{1}{2} \Delta \n_{ij}
+\end{equation}
+where the displacement magnitude is scaled by the combined stretching length:
+\begin{equation}
+\Delta = \epsilon |d_{\text{min}} - d_{ij}| \left( h_i(\n_{ij}) + h_j(\n_{ij}) \right)
+\end{equation}
+and $\epsilon$ is the relaxation step size (typically $\epsilon \in [0.1, 1.0]$).
+
+\subsection{Attraction Phase}
+To keep the packing consolidated, once overlaps are resolved, the algorithm can pull distant grains closer. For each grain $i$, the farthest grains within its nearest-neighbor cluster (of size $k_c$) are identified. If their normalized distance exceeds $d_{\text{max}}$, they are pulled together:
+\begin{equation}
+\cvec_i \leftarrow \cvec_i + \frac{1}{2} \Delta \n_{ij}, \quad \cvec_j \dots \cvec_j - \frac{1}{2} \Delta \n_{ij}
+\end{equation}
+with:
+\begin{equation}
+\Delta = \epsilon |d_{ij} - d_{\text{max}}| \left( h_i(\n_{ij}) + h_j(\n_{ij}) \right)
+\end{equation}
+
+\section{Analytical Fourier Representation and FFT Smoothing}
+\label{sec:fourier}
+
+Instead of voxelising the grain shapes directly, which introduces severe grid-aliasing and stair-step errors, we compute the analytical Fourier transform of each grain.
+
+\subsection{Analytical Fourier Transform of Grains}
+Let $\chi_g(\x)$ be the solid indicator function of a grain $g$ ($\chi_g(\x) = 1$ if $\x \in g$, $0$ otherwise). Its Fourier transform is:
+\begin{equation}
+F_g(\kvec) = \int_{\R^3} \chi_g(\x) e^{-2\pi i \kvec \cdot \x} d\x
+\end{equation}
+where $\kvec = [k_x, k_y, k_z]^T$ is the wavenumber vector in cycles per unit length.
+Let $G(\rho)$ be the normalized Fourier transform of the unit ball:
+\begin{equation}
+\label{eq:unit_ball_ft}
+G(\rho) = \frac{3(\sin \rho - \rho \cos \rho)}{\rho^3}
+\end{equation}
+with $G(0) = 1$. For small $\rho < 10^{-6}$, a Taylor series expansion is used to avoid numerical singularity:
+\begin{equation}
+G(\rho) = 1 - \frac{\rho^2}{10} + \frac{\rho^4}{280} - O(\rho^6)
+\end{equation}
+Using coordinate transformations, the Fourier transforms are computed analytically:
+\begin{itemize}
+    \item \textbf{Sphere}:
+    \begin{equation}
+    F_S(\kvec) = V_S e^{-2\pi i \kvec \cdot \cvec} G(2\pi \|\kvec\|_2 R)
+    \end{equation}
+    where $V_S = \frac{4}{3}\pi R^3$.
+    \item \textbf{Ellipsoid}:
+    \begin{equation}
+    \label{eq:ellipsoid_ft}
+    F_E(\kvec) = |\det M| \frac{4\pi}{3} e^{-2\pi i \kvec \cdot \cvec} G(2\pi \| M^T \kvec \|_2)
+    \end{equation}
+    which is exact and accounts for the ellipsoidal volume $V_E = \frac{4}{3}\pi |\det M|$.
+\end{itemize}
+The total Fourier transform of the solid phase is the sum over all grains:
+\begin{equation}
+F(\kvec) = \sum_{j=1}^N F_{g_j}(\kvec)
+\end{equation}
+
+\subsection{Smoothing Kernels}
+To reconstruct a smooth solid fraction field $\phi_s(\x)$ on a real-space grid, $F(\kvec)$ is multiplied by a smoothing kernel $K(\kvec)$:
+\begin{equation}
+F_{\text{smooth}}(\kvec) = F(\kvec) K(\kvec)
+\end{equation}
+Three smoothing kernels are supported:
+\begin{itemize}
+    \item \textbf{None}: $K(\kvec) = 1$.
+    \item \textbf{Cell-averaging kernel}: Represents the spatial average over a grid cell of size $\Delta x \times \Delta y \times \Delta z$:
+    \begin{equation}
+    K_{\text{cell}}(\kvec) = \text{sinc}(k_x \Delta x) \text{sinc}(k_y \Delta y) \text{sinc}(k_z \Delta z)
+    \end{equation}
+    where $\text{sinc}(x) = \frac{\sin(\pi x)}{\pi x}$.
+    \item \textbf{Gaussian kernel}: Represents convolution with an isotropic Gaussian of standard deviation $\sigma$ (normalized for unit DC gain):
+    \begin{equation}
+    K_{\text{Gauss}}(\kvec) = \exp(-2\pi^2 \sigma^2 \|\kvec\|_2^2)
+    \end{equation}
+    (Earlier versions used an erroneous leading factor of $1/2$; the current implementation guarantees $K(0) = 1$.)
+\end{itemize}
+The real-space solid volume fraction is obtained via the inverse fast Fourier transform (IFFT):
+\begin{equation}
+\phi_s(\x) = \text{clip}\left( \text{Re} \left[ \mathcal{F}^{-1}[F_{\text{smooth}}(\kvec)] \right] \frac{N_x N_y N_z}{V_{\text{domain}}}, \; 0.0, \; 1.0 \right)
+\end{equation}
+The local porosity field is then $\epsilon(\x) = 1.0 - \phi_s(\x)$.
+
+\subsection{Structure Factor and Correlation Length}
+We define the structure factor $S(\kvec)$, which characterises the two-point spatial correlations of the solid phase:
+\begin{equation}
+S(\kvec) = \frac{|F(\kvec)|^2}{V_{\text{domain}}}
+\end{equation}
+The two-point autocorrelation function $C(\mathbf{r})$ is the inverse Fourier transform of the structure factor:
+\begin{equation}
+C(\mathbf{r}) = \frac{\text{Re}\left[ \mathcal{F}^{-1}[S(\kvec)] \right]}{C(0)}
+\end{equation}
+The correlation length $\xi$ is defined as the radial distance at which the spherically averaged autocorrelation function $C_{\text{avg}}(r)$ decays to $1/e$:
+\begin{equation}
+C_{\text{avg}}(\xi) = e^{-1}
+\end{equation}
+The correlation length bounds the Representative Elementary Volume (REV) size; a domain with linear dimensions $L \gg \xi$ is required to obtain statistically representative samples.
+
+\section{Upscaling and Permeability Closures}
+\label{sec:upscaling}
+
+The upscaled permeability of the porous domain can be estimated by applying a local porosity-permeability relation pointwise to the smoothed porosity field $\epsilon(\x)$, followed by a harmonic average.
+
+\subsection{Porosity-Permeability Relations}
+Let $d$ be the characteristic grain diameter (taken as the mean equivalent diameter $2 \bar{R}_{\text{eq}}$).
+\begin{itemize}
+    \item \textbf{Kozeny-Carman}:
+    \begin{equation}
+    K_{\text{KC}}(\epsilon) = \frac{\epsilon^3 d^2}{180 (1-\epsilon)^2}
+    \end{equation}
+    \item \textbf{Ergun (with inertial correction)}:
+    \begin{equation}
+    \frac{1}{K_{\text{Erg}}(\epsilon)} = \frac{150 (1-\epsilon)^2}{\epsilon^3 d^2} + \frac{1.75 \text{Re} (1-\epsilon)}{\epsilon^3 d}
+    \end{equation}
+    where $\text{Re}$ is the local Reynolds number (set to $0$ for Stokes flow).
+    \item \textbf{Wen-Yu}:
+    \begin{equation}
+    K_{\text{WY}}(\epsilon) = \frac{\epsilon^{3.65} d^2}{18 (1-\epsilon)}
+    \end{equation}
+\end{itemize}
+
+\subsection{Harmonic Averaging}
+Assuming flow aligned along a main coordinate axis, the upscaled permeability $K_{\text{eff}}$ is computed as the harmonic mean of the permeability field $K(\x) = K(\epsilon(\x))$:
+\begin{equation}
+\label{eq:harmonic_mean}
+K_{\text{eff}} = \left( \frac{1}{V_{\text{domain}}} \int_{\mathcal{B}} \frac{1}{K(\x)} d\x \right)^{-1} \approx \left( \frac{1}{N_x N_y N_z} \sum_{i,j,k} \frac{1}{K(\x_{i,j,k})} \right)^{-1}
+\end{equation}
+which represents the series fluid resistance bottleneck.
+
+\section{Numerical Solvers and Iterative Acceleration}
+\label{sec:solvers}
+
+To compute transport properties, we solve partial differential equations within the void space $\Omega$.
+
+\subsection{Governing Equations}
+\begin{itemize}
+    \item \textbf{Effective Diffusivity}: We solve the steady-state diffusion equation for concentration $c(\x)$:
+    \begin{equation}
+    \nabla \cdot (D_0 \nabla c) = 0 \quad \text{in } \Omega
+    \end{equation}
+    subject to $c = 1$ at the inlet, $c = 0$ at the outlet, and no-flux conditions $\n \cdot \nabla c = 0$ on grain boundaries $\Gamma$ and lateral sides. The effective longitudinal diffusion coefficient is:
+    \begin{equation}
+    D_{\text{eff}} = \frac{1}{V_{\text{domain}}} \int_{\Omega} D_0 \frac{\partial c}{\partial x} d\x
+    \end{equation}
+    \item \textbf{Effective Permeability}: We solve the incompressible Stokes (or Navier-Stokes) equations for fluid velocity $\bfu(\x)$ and pressure $p(\x)$:
+    \begin{equation}
+    \rho (\bfu \cdot \nabla) \bfu = -\nabla p + \mu \nabla^2 \bfu, \quad \nabla \cdot \bfu = 0 \quad \text{in } \Omega
+    \end{equation}
+    subject to no-slip conditions $\bfu = \mathbf{0}$ on grain surfaces $\Gamma$, a fixed pressure drop $\Delta P$ between inlet and outlet, and symmetry conditions on lateral boundaries. The effective longitudinal permeability is:
+    \begin{equation}
+    K_{\text{eff}} = \frac{\mu}{V_{\text{domain}}} \frac{L_x}{\Delta P} \int_{\Omega} u_x d\x
+    \end{equation}
+\end{itemize}
+
+\subsection{Aitken Delta-Squared Extrapolation}
+During iterative solvers (such as SIMPLE or PISO couplings for pressure-velocity systems), the QoI sequence $\{x_n\}$ converges to a steady value. To accelerate this sequence and allow early termination at larger solver tolerances (e.g., $10^{-4}$ instead of $10^{-8}$), we apply the Aitken delta-squared transformation \citep{brezinski1996extrapolation}:
+\begin{equation}
+\label{eq:aitken_extrap}
+A(x_n) = x_n - \frac{(x_{n+1} - x_n)^2}{x_{n+2} - 2x_{n+1} + x_n}
+\end{equation}
+where $\Delta x_n = x_{n+1} - x_n$ and $\Delta^2 x_n = x_{n+2} - 2x_{n+1} + x_n$. This accelerates linear convergence sequences and provides stable asymptotic predictions.
+
+\section{Results}
+\label{sec:results}
+
+This section provides an outline of the numerical experiments and illustrations that demonstrate the theory and implementation. All figures and detailed test-case outputs are placeholders; they are intended to be generated from the example scripts (\texttt{examples/pure\_python\_mlmc.py}) and the test suite.
+
+\subsection{Random Geometry Generation}
+We illustrate the generation of random sphere and ellipsoid packings under different hierarchical refinement strategies and the effect of the optional Jodrey-Tory compaction.
+
+\begin{figure}[htbp]
+  \centering
+  % \includegraphics[width=0.48\textwidth]{figures/packing_level0.pdf}
+  % \includegraphics[width=0.48\textwidth]{figures/packing_level2.pdf}
+  \caption{Example random packings generated at different MLMC levels (placeholder). Left: coarse level; right: refined level using a combination of domain and grain-size scaling.}
+  \label{fig:packings}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  % \includegraphics[width=\textwidth]{figures/ellipsoid_packing.pdf}
+  \caption{Random packing of oriented ellipsoids with log-normal size distribution (placeholder).}
+  \label{fig:ellipsoids}
+\end{figure}
+
+\subsection{Analytical Fourier Fields}
+The analytical Fourier representation allows reconstruction of smooth solid-fraction fields without voxelization artifacts.
+
+\begin{figure}[htbp]
+  \centering
+  % \includegraphics[width=0.48\textwidth]{figures/fourier_cell.pdf}
+  % \includegraphics[width=0.48\textwidth]{figures/fourier_gaussian.pdf}
+  \caption{Reconstructed solid-fraction fields using cell-averaging and Gaussian smoothing kernels (placeholder).}
+  \label{fig:fourier_fields}
+\end{figure}
+
+\subsection{MLMC Performance}
+Convergence behavior, sample allocation, and computational savings are shown for both fixed and adaptive MLMC using packing statistics and Fourier-derived QoIs as examples.
+
+\begin{figure}[htbp]
+  \centering
+  % \includegraphics[width=0.48\textwidth]{figures/mlmc_bias_variance.pdf}
+  % \includegraphics[width=0.48\textwidth]{figures/mlmc_cost_savings.pdf}
+  \caption{MLMC diagnostics: decay of level differences and total cost compared to standard Monte Carlo (placeholder).}
+  \label{fig:mlmc}
+\end{figure}
+
+\subsection{Quantities of Interest}
+Distributions of algebraic and Fourier-based QoIs (porosity, specific surface area, upscaled permeability) are compared across levels.
+
+Test cases to be documented in full (see also Appendix~\ref{app:implementation} for code mapping):
+\begin{itemize}
+  \item Monodisperse periodic spheres.
+  \item Polydisperse (log-normal) ellipsoids with and without Jodrey-Tory.
+  \item Effect of hierarchy string (\texttt{g}, \texttt{d}, \texttt{s}, \texttt{n}).
+  \item Comparison of cheap Fourier permeability vs. (future) full PDE solves.
+\end{itemize}
+
+\section{Software Architecture and Solver Abstraction}
+\label{sec:architecture}
+
+The pure-Python rewrite separates concerns cleanly:
+
+\begin{itemize}
+    \item \texttt{geometry/}: \texttt{Grain}/\texttt{Packing} data structures, deterministic name-based placement (\texttt{sample\_packing\_from\_name}), Jodrey-Tory, and analytical Fourier transforms/field reconstruction.
+    \item \texttt{solvers/}: Implementations of the narrow \texttt{SolverProtocol}:
+\begin{verbatim}
+    class SolverProtocol(Protocol):
+        def setup(self, packing: Packing) -> None: ...
+        def solve(self) -> np.ndarray: ...
+        def close(self) -> None: ...
+\end{verbatim}
+    Current realizations: \texttt{PackingStatsSolver} (algebraic descriptors) and \texttt{FourierSolver} (FFT-derived mean solid fraction and upscaled permeability).
+    \item \texttt{mlmc/}: \texttt{MLMCEstimator} drives the workflow using a \texttt{PairSampler} (ensures identical realization names for coarse/fine levels), statistics (\texttt{compute\_mlmc\_stats}, Giles allocation, convergence check), and parallel workers via \texttt{concurrent.futures.ProcessPoolExecutor}.
+    \item All configuration lives in explicit dataclasses; zero reliance on global mutable state or ``exec(open(...))''.
+\end{itemize}
+
+A high-level convenience \texttt{run\_mlmc(pcfg, mcfg)} is provided for the common case. The architecture is deliberately minimal so that expensive external PDE solvers can be introduced later via the same protocol without touching the MLMC engine or reproducibility guarantees.
+
+\section*{References}
+
+\begin{thebibliography}{10}
+
+\bibitem{blunt2013pore}
+M.~J. Blunt, B.~Bijeljic, H.~Dong, O.~Gharbi, S.~Iglauer, P.~Mostaghimi, A.~Paluszny, and C.~Pentland.
+\newblock Pore-scale imaging and modelling.
+\newblock {\em Advances in Water Resources}, 51:197--216, 2013.
+
+\bibitem{giles2008multilevel}
+M.~B. Giles.
+\newblock Multilevel Monte Carlo path simulation.
+\newblock {\em Operations Research}, 56(3):607--617, 2008.
+
+\bibitem{cliffe2011multilevel}
+K.~A. Cliffe, M.~B. Giles, R.~Scheichl, and A.~L. Teckentrup.
+\newblock Multilevel Monte Carlo methods and applications to elliptic PDEs with random coefficients.
+\newblock {\em Computing and Visualization in Science}, 14(1):3--15, 2011.
+
+\bibitem{ozols2009haar}
+M.~Ozols.
+\newblock How to generate a random unitary matrix.
+\newblock {\em arXiv preprint arXiv:0903.2635}, 2009.
+
+\bibitem{jodrey1985computer}
+W.~S. Jodrey and E.~M. Tory.
+\newblock Computer simulation of isotropic, homogeneous, dense random packing of equal spheres.
+\newblock {\em Powder Technology}, 30(2):111--118, 1981.
+
+\bibitem{khirevich2015coarse}
+S.~Khirevich, I.~Ginzburg, and U.~Tallarek.
+\newblock Coarse-grid lattice Boltzmann simulations of single-phase flow in random packings of spheres.
+\newblock {\em Journal of Computational Physics}, 281:708--728, 2015.
+
+\bibitem{venema1991effective}
+P.~Venema, R.~P. W.~J. Struis, J.~C. Leyte, and D.~Bedeaux.
+\newblock The effective self-diffusion coefficient of solvent molecules in colloidal crystals.
+\newblock {\em Journal of Colloid and Interface Science}, 141(2):360--373, 1991.
+
+\bibitem{brezinski1996extrapolation}
+C.~Brezinski and M.~Redivo~Zaglia.
+\newblock {\em Extrapolation Methods: Theory and Practice}.
+\newblock Elsevier, 1991.
+
+\bibitem{torquato2002random}
+S.~Torquato.
+\newblock {\em Random Heterogeneous Materials: Microstructure and Macroscopic Properties}.
+\newblock Springer, 2002.
+
+\bibitem{baranau2013pore}
+V.~Baranau, D.~Hlushkou, S.~Khirevich, and U.~Tallarek.
+\newblock Pore-size entropy of random hard-sphere packings.
+\newblock {\em Soft Matter}, 9(12):3361--3372, 2013.
+
+\bibitem{Alyafei:2015aa}
+N.~Alyafei, A.~Q. Raeini, A.~Paluszny, and M.~J. Blunt.
+\newblock A sensitivity study of the effect of image resolution on predicted petrophysical properties.
+\newblock {\em Transport in Porous Media}, 110(1):157--169, 2015.
+
+\bibitem{maier2000pore}
+R.~S. Maier, D.~M. Kroll, R.~S. Bernard, S.~E. Howington, J.~F. Peters, and H.~T. Davis.
+\newblock Pore-scale simulation of dispersion.
+\newblock {\em Physics of Fluids}, 12(8):2065--2079, 2000.
+
+\bibitem{collier2014continuation}
+N.~Collier, A.-L. Haji-Ali, F.~Nobile, E.~von Schwerin, and R.~Tempone.
+\newblock A continuation multilevel Monte Carlo algorithm.
+\newblock {\em BIT Numerical Mathematics}, 55:399--421, 2015.
+
+\bibitem{boccardo2014pore}
+G.~Boccardo, M.~Icardi, R.~Sethi, and D.~L. Marchisio.
+\newblock Pore-scale simulation of solute transport in 3D geometries reconstructed from spherical packings.
+\newblock {\em Chemical Engineering Science}, 117:158--166, 2014.
+
+\bibitem{icardi2014pore}
+M.~Icardi, G.~Boccardo, and D.~L. Marchisio.
+\newblock Pore-scale simulation of dispersion in packed beds.
+\newblock {\em Physical Review E}, 90(1):013032, 2014.
+
+\bibitem{haji2016multi}
+A.-L. Haji-Ali, F.~Nobile, and R.~Tempone.
+\newblock Multi-index Monte Carlo: when sparsity meets sampling.
+\newblock {\em Numerische Mathematik}, 132(4):767--806, 2016.
+
+\bibitem{giles2015multilevel}
+M.~B. Giles.
+\newblock Multilevel Monte Carlo methods.
+\newblock {\em Acta Numerica}, 24:259--328, 2015.
+
+\bibitem{torquato2013random}
+S.~Torquato and F.~H. Stillinger.
+\newblock Jammed hard-particle packings: From Kepler to Bernal and beyond.
+\newblock {\em Reviews of Modern Physics}, 82:2633, 2010.
+
+\bibitem{jeong2023fourier}
+C.~Jeong et al.
+\newblock Fourier-based characterization of random heterogeneous media.
+\newblock {\em Journal of Computational Physics}, 2023 (and references therein).
+
+\end{thebibliography}
+
+\appendix
+\section{Implementation Mapping}
+\label{app:implementation}
+
+This appendix maps the mathematical objects and algorithms described in the main text to the current Python implementation in the \texttt{porescalemc} package.
+
+\subsection{Geometry and Sampling}
+\begin{description}
+  \item[Grain representation] \texttt{porescalemc/geometry/grains.py}: \texttt{Grain} dataclass. Spheres use a 1-element \texttt{transform}; ellipsoids use a flattened 9-element matrix $M$. Volume is computed as $\frac{4}{3}\pi|\det(M)|$ for ellipsoids.
+  \item[Normalized distance] \texttt{ellipsoid\_distance} and supporting functions implement the stretching-length distance of Eq.~(\ref{eq:norm_distance}).
+  \item[Deterministic sampling] \texttt{porescalemc/geometry/placement.py}: \texttt{sample\_packing\_from\_name(level, name, cfg)} derives an RNG seed from the name (via hashing) to guarantee identical realizations when the same name is used at levels $\ell$ and $\ell-1$.
+  \item[RSA + Jodrey-Tory] \texttt{placement.py} and \texttt{jodrey\_tory.py}. The configuration flags \texttt{use\_jodrey\_tory}, \texttt{jt\_min\_dist}, \texttt{jt\_max\_dist} etc.\ control the optional attraction phase.
+\end{description}
+
+\subsection{Fourier Representation}
+All analytical transforms and reconstruction live in \texttt{porescalemc/geometry/fourier\_field.py}:
+\begin{itemize}
+  \item \texttt{unit\_ball\_ft(rho)} implements the normalized ball transform $G(\rho)$ of Eq.~(\ref{eq:unit_ball_ft}), with Taylor expansion for $\rho \approx 0$.
+  \item \texttt{grain\_fourier\_transform} dispatches between the sphere formula and the exact ellipsoid formula using $2\pi \|M^T \kvec\|$.
+  \item \texttt{smoothing\_kernel} implements the three kernels (none, cell, Gaussian with unit DC gain).
+  \item \texttt{porosity\_field} performs the IFFT normalization $\phi_s = \operatorname{Re}(\mathcal{F}^{-1}[F K]) \cdot N / V$ followed by clipping.
+  \item \texttt{upscaled\_permeability} applies the chosen closure law (via \texttt{porescalemc/geometry/transforms.py}) to the reconstructed solid-fraction field and returns the harmonic mean.
+  \item Structure factor, autocorrelation, and correlation length functions are also provided for REV analysis.
+\end{itemize}
+
+\subsection{MLMC Estimator and Statistics}
+\begin{description}
+  \item[Pair sampling] \texttt{porescalemc/mlmc/estimator.py}: \texttt{PairSampler} is the callable responsible for constructing correlated coarse/fine pairs by reusing the exact same \texttt{name}.
+  \item[Core estimator] \texttt{MLMCEstimator} orchestrates geometry and solver factories. It supports both ``fixed'' and ``adaptive'' modes.
+  \item[Statistics] \texttt{porescalemc/mlmc/statistics.py}:
+    \begin{itemize}
+      \item \texttt{compute\_mlmc\_stats} implements the telescoping estimator, unbiased variances, and statistical error.
+      \item \texttt{optimal\_sample\_counts} implements the Giles allocation formula.
+      \item \texttt{check\_convergence} performs the bias/statistical-error test.
+      \item Richardson-style bias extrapolation is activated when \texttt{MLMCConfig.extrapolate\_bias = True}.
+    \end{itemize}
+  \item[Parallelism] \texttt{workers.py} uses \texttt{concurrent.futures.ProcessPoolExecutor} with name-based task distribution.
+\end{description}
+
+\subsection{Solver Layer}
+\begin{description}
+  \item[Protocol] \texttt{porescalemc/solvers/base.py} defines the minimal \texttt{SolverProtocol} (setup/solve/close) consumed by the MLMC engine.
+  \item[Packing QoIs] \texttt{porescalemc/solvers/packing.py}: \texttt{PackingStatsSolver} returns the vector of algebraic descriptors listed in Section~\ref{sec:results}.
+  \item[Fourier QoIs] \texttt{porescalemc/solvers/fourier.py}: \texttt{FourierSolver} returns mean solid fraction (from the smoothed field) and upscaled permeability.
+\end{description}
+
+\subsection{Configuration}
+All user-facing parameters are collected in \texttt{porescalemc/config.py}:
+\begin{itemize}
+  \item \texttt{PackingConfig} -- geometry and PSD parameters.
+  \item \texttt{MLMCConfig} -- levels, tolerance, rates, \texttt{hierarchy} string, \texttt{extrapolate\_bias}.
+  \item \texttt{FourierConfig} -- resolution and smoothing parameters.
+  \item \texttt{hierarchy\_level(mlmc\_cfg, packing\_cfg, level)} returns the scaled configuration for that level.
+\end{itemize}
+
+High-level convenience functions are exposed via \texttt{porescalemc.run\_mlmc} and direct instantiation of \texttt{MLMCEstimator}.
+
+\subsection{Entry Points and Examples}
+\begin{itemize}
+  \item \texttt{examples/pure\_python\_mlmc.py} -- demonstrates both fixed and adaptive runs with packing statistics.
+  \item Tests in \texttt{tests/} cover geometry primitives, Fourier round-trips, pair-name coupling, and synthetic MLMC rate recovery.
+\end{itemize}
+
+This mapping ensures that every formula in the main text has a direct, traceable counterpart in the source code.
+
+\end{document}
