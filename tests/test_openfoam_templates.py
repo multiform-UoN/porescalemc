@@ -167,7 +167,8 @@ class TestWriteDomainsize(unittest.TestCase):
             tmppath = tmp.name
         try:
             write_domainsize(packing, tmppath, grid_res=20.0)
-            content = open(tmppath).read()
+            with open(tmppath) as fh:
+                content = fh.read()
             for token in ("xgrid", "ygrid", "zgrid", "scalegrid", "x1", "x2"):
                 self.assertIn(token, content, f"Missing token '{token}' in domainsize")
         finally:
@@ -181,7 +182,8 @@ class TestWriteDomainsize(unittest.TestCase):
             tmppath = tmp.name
         try:
             write_domainsize(packing, tmppath, grid_res=30.0)
-            content = open(tmppath).read()
+            with open(tmppath) as fh:
+                content = fh.read()
             Lx = packing.box[0]
             expected_xgrid = max(1, int(30.0 * Lx))
             self.assertIn(f"xgrid {expected_xgrid};", content)

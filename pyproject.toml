@@ -12,12 +12,11 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 [project.optional-dependencies]
 test = ["pytest>=7", "pytest-cov"]
 plot = ["matplotlib>=3.7"]
+mesh = ["gmsh>=4.11"]
 
-[tool.setuptools]
-packages = ["porescalemc", "porescalemc.geometry", "porescalemc.mlmc", "porescalemc.solvers"]
-
-[tool.setuptools.package-dir]
-"porescalemc" = "src"
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["porescalemc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

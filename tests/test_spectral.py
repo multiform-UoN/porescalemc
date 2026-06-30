@@ -6,7 +6,7 @@ Validation cases:
 3. Effective diffusivity is less than D0 for a porous medium (tortuosity).
 4. Stokes permeability is positive and finite for a porous medium.
 5. Advection-diffusion at Pe=0 matches pure diffusion.
-6. n_directions=3 returns shape (3,) for both diffusion and Stokes.
+6. n_directions=3 returns flattened 3×3 tensors for diffusion and Stokes.
 """
 
 import unittest
@@ -83,9 +83,15 @@ class TestSpectralDiffusion(unittest.TestCase):
         solver = SpectralDiffusionSolver(spectral_config=cfg)
         solver.setup(packing)
         result = solver.solve()
+        diagnostics = solver.diagnostics()
         self.assertEqual(result.shape, (9,))
         diag = result[[0, 4, 8]]  # D_xx, D_yy, D_zz
         self.assertTrue((diag > 0).all())
+        self.assertAlmostEqual(diagnostics["diffusivity_xx"], result[0])
+        self.assertAlmostEqual(diagnostics["diffusivity_x"], result[0])
+        self.assertAlmostEqual(diagnostics["diffusivity_y"], result[4])
+        self.assertAlmostEqual(diagnostics["diffusivity_z"], result[8])
+        self.assertIn("diffusivity_anisotropy", diagnostics)
 
     def test_solution_fields_and_diagnostics_are_available(self):
         """Diffusion solver should cache fields and scalar diagnostics for debugging."""
@@ -177,9 +183,15 @@ class TestSpectralStokes(unittest.TestCase):
         solver = SpectralStokesSolver(spectral_config=cfg)
         solver.setup(packing)
         result = solver.solve()
+        diagnostics = solver.diagnostics()
         self.assertEqual(result.shape, (9,))
         diag = result[[0, 4, 8]]  # K_xx, K_yy, K_zz
         self.assertTrue((diag > 0).all())
+        self.assertAlmostEqual(diagnostics["permeability_xx"], result[0])
+        self.assertAlmostEqual(diagnostics["permeability_x"], result[0])
+        self.assertAlmostEqual(diagnostics["permeability_y"], result[4])
+        self.assertAlmostEqual(diagnostics["permeability_z"], result[8])
+        self.assertIn("permeability_anisotropy", diagnostics)
 
 
 class TestSpectralAdvDiff(unittest.TestCase):
@@ -210,6 +222,29 @@ class TestSpectralAdvDiff(unittest.TestCase):
         solver.setup(packing)
         result = solver.solve()
         self.assertEqual(result.shape, (4,))  # 2 D_eff + 2 K_eff
+
+    def test_n_directions_3_returns_diffusion_and_permeability_tensors(self):
+        """n_directions=3 returns flattened 3×3 D_adv and K tensors."""
+        cfg = SpectralConfig(
+            resolution=8,
+            eta=1e-4,
+            max_iter=120,
+            tol=1e-5,
+            n_directions=3,
+            peclet=0.0,
+        )
+        packing = _sphere_packing(radius=0.08)
+        solver = SpectralAdvectionDiffusionSolver(spectral_config=cfg)
+        solver.setup(packing)
+        result = solver.solve()
+        diagnostics = solver.diagnostics()
+        self.assertEqual(result.shape, (18,))
+        self.assertTrue((result[[0, 4, 8]] > 0).all())
+        self.assertTrue((result[[9, 13, 17]] > 0).all())
+        self.assertAlmostEqual(diagnostics["advdiff_diffusivity_x"], result[0])
+        self.assertAlmostEqual(diagnostics["advdiff_diffusivity_y"], result[4])
+        self.assertAlmostEqual(diagnostics["permeability_x"], result[9])
+        self.assertAlmostEqual(diagnostics["permeability_z"], result[17])
 
 
 if __name__ == "__main__":

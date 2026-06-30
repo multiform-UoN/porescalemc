@@ -40,7 +40,6 @@ except ImportError:
 # Physical-group names written into the mesh for downstream solvers.
 _FLUID_TAG    = "fluid"
 _SOLID_TAG    = "solid"
-_PERIODIC_TAG = "periodic"
 
 
 class GmshPackingMesher:
@@ -99,31 +98,70 @@ class GmshPackingMesher:
         # --- Bounding box ---
         box_tag = gmsh.model.occ.addBox(0.0, 0.0, 0.0, Lx, Ly, Lz)
 
-        # --- Grains (spheres / axis-aligned ellipsoids) ---
+        # --- Grains (spheres / oriented ellipsoids) ---
         grain_tags: list[int] = []
         for grain in packing.grains:
             cx, cy, cz = grain.center
-            rx, ry, rz = grain.radii
-            if rx == ry == rz:
-                tag = gmsh.model.occ.addSphere(cx, cy, cz, rx)
-            else:
-                # Sphere + dilate gives an axis-aligned ellipsoid.
-                tag = gmsh.model.occ.addSphere(cx, cy, cz, 1.0)
-                gmsh.model.occ.dilate([(3, tag)], cx, cy, cz, rx, ry, rz)
+            M = grain.transformation_matrix()
+            # Create unit sphere at origin, then apply full affine transform
+            # x = center + M @ u  (|u|<=1)
+            tag = gmsh.model.occ.addSphere(0.0, 0.0, 0.0, 1.0)
+            affine = [
+                M[0, 0], M[0, 1], M[0, 2], cx,
+                M[1, 0], M[1, 1], M[1, 2], cy,
+                M[2, 0], M[2, 1], M[2, 2], cz,
+            ]
+            gmsh.model.occ.affineTransform([(3, tag)], affine)
             grain_tags.append(tag)
 
-        # --- Clip grains to the box (intersection, not subtraction) ---
-        # fragment(toolDimTags, objectDimTags) makes a conformal split.
+        # --- Split grains against the box boundary ---
+        # fragment(toolDimTags, objectDimTags) makes a conformal split.  Empty
+        # packings are valid MLMC samples, so skip the Boolean call if there
+        # are no grains.
         grain_pairs = [(3, t) for t in grain_tags]
-        box_pair    = [(3, box_tag)]
-
-        out_map: list[list[tuple[int, int]]]
-        out_vols, _ = gmsh.model.occ.fragment(box_pair, grain_pairs)
+        box_pair = [(3, box_tag)]
+        if grain_pairs:
+            gmsh.model.occ.fragment(box_pair, grain_pairs)
         gmsh.model.occ.synchronize()
 
         # --- Identify fluid and solid volumes ---
         all_vols = [tag for dim, tag in gmsh.model.getEntities(3)]
-        fluid_vols, solid_vols = self._classify_volumes(all_vols, packing)
+
+        # Robust classification by matching volumes to expected grain volumes
+        # (avoids centroid problems for centered grains)
+        grain_vol_expected = [g.volume for g in packing.grains]
+        vol_masses = [(vtag, gmsh.model.occ.getMass(3, vtag)) for vtag in all_vols]
+
+        fluid_vols = []
+        solid_vols = []
+        used = set()
+        for gvol in grain_vol_expected:
+            best_tag = None
+            best_d = 1e9
+            for vtag, m in vol_masses:
+                if vtag in used:
+                    continue
+                d = abs(m - gvol)
+                if d < best_d and d < max(1e-6, 0.2 * gvol):
+                    best_d = d
+                    best_tag = vtag
+            if best_tag is not None:
+                solid_vols.append(best_tag)
+                used.add(best_tag)
+        for vtag, m in vol_masses:
+            if vtag not in used:
+                fluid_vols.append(vtag)
+
+        # --- Compute volumes from mesh (for QoI) ---
+        self.fluid_volume = (
+            sum(gmsh.model.occ.getMass(3, vtag) for vtag in fluid_vols)
+            if fluid_vols else 0.0
+        )
+        self.solid_volume = (
+            sum(gmsh.model.occ.getMass(3, vtag) for vtag in solid_vols)
+            if solid_vols else 0.0
+        )
+        self.box = (Lx, Ly, Lz)
 
         # --- Physical groups ---
         if fluid_vols:
@@ -143,9 +181,14 @@ class GmshPackingMesher:
         gmsh.model.mesh.generate(3)
         if self.order > 1:
             gmsh.model.mesh.setOrder(self.order)
+
+        # Store simple mesh stats for QoI use
+        _, elem_tags, _ = gmsh.model.mesh.getElements(3)
+        self.num_3d_elements = sum(len(tags) for tags in elem_tags)
+
         _log.info(
-            "Meshing complete: %d fluid vols, %d solid vols",
-            len(fluid_vols), len(solid_vols),
+            "Meshing complete: %d fluid vols, %d solid vols, %d elements",
+            len(fluid_vols), len(solid_vols), self.num_3d_elements,
         )
 
     def write(self, path: str | Path) -> None:
@@ -158,6 +201,18 @@ class GmshPackingMesher:
         if self._initialized:
             gmsh.finalize()
             self._initialized = False
+
+    def get_mesh_porosity(self) -> float:
+        """Return fluid volume fraction computed from the actual mesh volumes."""
+        if not hasattr(self, "fluid_volume") or not hasattr(self, "box"):
+            return 0.0
+        Lx, Ly, Lz = self.box
+        box_vol = Lx * Ly * Lz
+        return self.fluid_volume / box_vol if box_vol > 0 else 0.0
+
+    def get_num_elements(self) -> int:
+        """Return total number of 3D mesh elements."""
+        return getattr(self, "num_3d_elements", 0)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -186,15 +241,7 @@ class GmshPackingMesher:
 
     def _add_boundary_physical_groups(self, Lx: float, Ly: float, Lz: float) -> None:
         """Add physical surface groups for the six box faces."""
-        face_names = {
-            "x_minus": (1, 0.0,  0.0,  0.0,  1.0),
-            "x_plus":  (1, Lx,   0.0,  0.0,  1.0),
-            "y_minus": (2, 0.0,  0.0,  0.0,  1.0),
-            "y_plus":  (2, 0.0,  Ly,   0.0,  1.0),
-            "z_minus": (3, 0.0,  0.0,  0.0,  1.0),
-            "z_plus":  (3, 0.0,  0.0,  Lz,   1.0),
-        }
-        # Simpler approach: find surfaces by normal direction using BoundingBox
+        # Find surfaces by normal direction using BoundingBox.
         surfs = [tag for dim, tag in gmsh.model.getEntities(2)]
         tol = min(Lx, Ly, Lz) * 1e-3
         face_groups: dict[str, list[int]] = {
@@ -242,8 +289,14 @@ class GmshPackingMesher:
                     0.0, 0.0, 1.0, tvec[2],
                     0.0, 0.0, 0.0, 1.0,
                 ]
-                for stag in slave_tags:
-                    gmsh.model.mesh.setPeriodic(2, [stag], master_tags, affine)
+                pairs = _matching_periodic_surface_pairs(slave_tags, master_tags, tvec)
+                if len(pairs) != len(slave_tags):
+                    _log.warning(
+                        "Periodic pairing incomplete for %s -> %s: %d/%d faces",
+                        slave_name, master_name, len(pairs), len(slave_tags),
+                    )
+                for slave_tag, master_tag in pairs:
+                    gmsh.model.mesh.setPeriodic(2, [slave_tag], [master_tag], affine)
 
 
 # ---------------------------------------------------------------------------
@@ -253,30 +306,67 @@ class GmshPackingMesher:
 def _point_in_any_grain(
     cx: float, cy: float, cz: float, grains: Sequence[Grain]
 ) -> bool:
-    """Return True if (cx, cy, cz) is inside any grain ellipsoid."""
+    """Return True if (cx, cy, cz) is inside any grain (full oriented ellipsoid support)."""
+    p = np.array([cx, cy, cz], dtype=float)
     for g in grains:
-        gx, gy, gz = g.center
-        rx, ry, rz = g.radii
-        val = (
-            ((cx - gx) / rx) ** 2
-            + ((cy - gy) / ry) ** 2
-            + ((cz - gz) / rz) ** 2
-        )
-        if val <= 1.0:
-            return True
+        if g.is_ellipsoid:
+            M = g.transformation_matrix()
+            try:
+                Minv = np.linalg.inv(M)
+                u = Minv @ (p - g.center)
+                if np.dot(u, u) <= 1.0 + 1e-9:
+                    return True
+            except np.linalg.LinAlgError:
+                pass
+        else:
+            gx, gy, gz = g.center
+            r = float(g.radii[0])
+            d = p - np.array([gx, gy, gz])
+            if np.dot(d, d) <= r * r + 1e-9:
+                return True
     return False
 
 
 def _physical_group_tags(dim: int, name: str) -> list[int]:
     """Return entity tags in a physical group by name, or [] if not found."""
-    try:
-        tag = gmsh.model.getPhysicalGroupsForName(name)
-        if not tag:
-            return []
-        # tag is a list of (dim, group_tag) tuples matching the name
-        for d, gt in tag:
-            if d == dim:
-                return list(gmsh.model.getEntitiesForPhysicalGroup(d, gt))
-    except Exception:
-        pass
+    for d, group_tag in gmsh.model.getPhysicalGroups(dim):
+        if d != dim:
+            continue
+        if gmsh.model.getPhysicalName(d, group_tag) == name:
+            return list(gmsh.model.getEntitiesForPhysicalGroup(d, group_tag))
     return []
+
+
+def _matching_periodic_surface_pairs(
+    slave_tags: Sequence[int],
+    master_tags: Sequence[int],
+    translation: Sequence[float],
+) -> list[tuple[int, int]]:
+    """Pair split periodic faces by translated bounding-box agreement."""
+    t = np.asarray(translation, dtype=float)
+    candidates: list[tuple[float, int, int]] = []
+    for slave in slave_tags:
+        slave_box = np.asarray(gmsh.model.getBoundingBox(2, slave), dtype=float)
+        shifted = slave_box.copy()
+        shifted[:3] += t
+        shifted[3:] += t
+        for master in master_tags:
+            master_box = np.asarray(gmsh.model.getBoundingBox(2, master), dtype=float)
+            error = float(np.max(np.abs(shifted - master_box)))
+            candidates.append((error, slave, master))
+
+    used_slave: set[int] = set()
+    used_master: set[int] = set()
+    pairs: list[tuple[int, int]] = []
+    tol = max(1e-6, 1e-5 * float(np.max(np.abs(t))))
+    for error, slave, master in sorted(candidates):
+        if slave in used_slave or master in used_master:
+            continue
+        # Gmsh bounding boxes include small geometric tolerances; accept a
+        # conservative tolerance scaled to the periodic translation length.
+        if error > tol:
+            continue
+        pairs.append((slave, master))
+        used_slave.add(slave)
+        used_master.add(master)
+    return pairs

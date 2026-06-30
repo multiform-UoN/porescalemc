@@ -9,7 +9,9 @@ Demonstrates:
 - Same realization used for coarse/fine levels (key for variance reduction)
 
 Run with:
-    PYTHONPATH=. python examples/pure_python_mlmc.py
+    python examples/pure_python_mlmc.py
+or, without editable install:
+    PYTHONPATH=/path/to/porescalemc/src python examples/pure_python_mlmc.py
 """
 
 from __future__ import annotations

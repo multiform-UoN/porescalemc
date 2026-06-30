@@ -70,7 +70,7 @@ from porescalemc.solvers.base import SolverProtocol
 
 _log = logging.getLogger(__name__)
 
-_AXIS_NAMES = ["x", "y", "z"]
+_AXIS_NAMES = ("x", "y", "z")
 
 
 def _field_diagnostics(phi_s: np.ndarray, phi_f: np.ndarray) -> dict[str, float]:
@@ -91,17 +91,36 @@ def _add_directional_diagnostics(
     """Populate Cartesian directional or tensor values into diagnostics.
 
     If *values* has 9 entries it is treated as a flattened 3×3 tensor and
-    keys are named ``{prefix}_ij`` (e.g. ``diffusivity_xx``).  Otherwise,
-    each entry maps to ``{prefix}_{axis}`` (e.g. ``diffusivity_x``).
+    keys are named ``{prefix}_ij`` (e.g. ``diffusivity_xx``).  Diagonal
+    aliases ``{prefix}_x``, ``{prefix}_y`` and ``{prefix}_z`` are also added
+    because those are the most common scalar summaries.  Otherwise, each entry
+    maps to ``{prefix}_{axis}`` (e.g. ``diffusivity_x``).
     """
-    if len(values) == 9:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 9:
+        tensor = arr.reshape(3, 3)
         for i in range(3):
             for j in range(3):
                 key = f"{prefix}_{_AXIS_NAMES[i]}{_AXIS_NAMES[j]}"
-                diagnostics[key] = float(values[i * 3 + j])
-    else:
-        for idx, val in enumerate(values):
+                diagnostics[key] = float(tensor[i, j])
+        summary_values = np.diag(tensor)
+        for idx, val in enumerate(summary_values):
             diagnostics[f"{prefix}_{_AXIS_NAMES[idx]}"] = float(val)
+    else:
+        summary_values = arr
+        for idx, val in enumerate(arr[: len(_AXIS_NAMES)]):
+            diagnostics[f"{prefix}_{_AXIS_NAMES[idx]}"] = float(val)
+
+    if summary_values.size:
+        diagnostics[f"{prefix}_mean"] = float(np.mean(summary_values))
+        diagnostics[f"{prefix}_min"] = float(np.min(summary_values))
+        diagnostics[f"{prefix}_max"] = float(np.max(summary_values))
+        min_value = diagnostics[f"{prefix}_min"]
+        diagnostics[f"{prefix}_anisotropy"] = (
+            diagnostics[f"{prefix}_max"] / min_value
+            if min_value > 0.0 and np.isfinite(min_value)
+            else float("inf")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -256,13 +275,12 @@ class SpectralDiffusionSolver(SolverProtocol):
         Porosity field parameters. If None, derived from spectral_config.
     packing : Packing, optional
         Can be supplied here or via setup().
-    eta, max_iter, tol : legacy kwargs
-        Override the corresponding spectral_config fields (backward compat).
 
     Returns (solve)
     ---------------
-    np.ndarray, shape (n_directions,)
-        D_eff_i / D0 for i = 0 … n_directions - 1.
+    np.ndarray
+        Shape ``(n_directions,)`` for one or two directions.  For
+        ``n_directions == 3`` returns the flattened full 3×3 tensor.
     """
 
     def __init__(
@@ -456,12 +474,12 @@ class SpectralStokesSolver(SolverProtocol):
     packing : Packing, optional
     mu : float
         Dynamic viscosity (default 1.0).
-    eta, max_iter, tol : legacy kwargs
 
     Returns (solve)
     ---------------
-    np.ndarray, shape (n_directions,)
-        K_eff_i for i = 0 … n_directions - 1.
+    np.ndarray
+        Shape ``(n_directions,)`` for one or two directions.  For
+        ``n_directions == 3`` returns the flattened full 3×3 tensor.
     """
 
     def __init__(
@@ -481,11 +499,15 @@ class SpectralStokesSolver(SolverProtocol):
         self.packing: Packing | None = packing
         self._result: np.ndarray | None = None
         self._velocity_fields: list[np.ndarray] | None = None  # u per direction
+        self._fields: dict[str, np.ndarray] = {}
+        self._diagnostics: dict[str, float] = {}
 
     def setup(self, packing: Packing) -> None:
         self.packing = packing
         self._result = None
         self._velocity_fields = None
+        self._fields = {}
+        self._diagnostics = {}
 
     def solve(self) -> np.ndarray:
         if self.packing is None:
@@ -616,9 +638,11 @@ class SpectralAdvectionDiffusionSolver(SolverProtocol):
 
     Returns (solve)
     ---------------
-    np.ndarray, shape (2 * n_directions,)
-        Concatenation of [D_eff_0, ..., D_eff_{n-1}, K_eff_0, ..., K_eff_{n-1}].
-        K_eff values are the Stokes permeabilities used to generate the velocity.
+    np.ndarray
+        For one or two directions, concatenates diagonal
+        ``[D_adv_0, ..., D_adv_{n-1}, K_0, ..., K_{n-1}]``.  For
+        ``n_directions == 3``, concatenates flattened full 3×3
+        advection-diffusion and permeability tensors.
     """
 
     def __init__(
@@ -685,6 +709,7 @@ class SpectralAdvectionDiffusionSolver(SolverProtocol):
 
         coords = [(xi, kx, Lx), (yi, ky, Ly), (zi, kz, Lz)]
         D_eff_ad = np.zeros(self.cfg.n_directions)
+        correctors: list[tuple[np.ndarray, float]] = []
         fields: dict[str, np.ndarray] = {
             "solid_fraction": phi_s.copy(),
             "porosity": phi_f.copy(),
@@ -729,12 +754,28 @@ class SpectralAdvectionDiffusionSolver(SolverProtocol):
             c3d_f = c_tilde.reshape(nx, ny, nz)
             dc = np.real(np.fft.ifftn(2.0j * np.pi * ki * np.fft.fftn(c3d_f)))
             D_eff_ad[i] = max(phi_f_mean + Li * float(np.mean(phi_f * dc)), 0.0)
+            correctors.append((c3d_f, Li))
             fields[f"advdiff_corrector_{_AXIS_NAMES[i]}"] = c3d_f.copy()
 
-        self._result = np.concatenate([D_eff_ad, K_eff])
+        if self.cfg.n_directions == 3:
+            k_comps = [kx, ky, kz]
+            D_tensor = np.zeros((3, 3))
+            for j, (c3d_j, Lj) in enumerate(correctors):
+                c3d_hat = np.fft.fftn(c3d_j)
+                for i, ki_i in enumerate(k_comps):
+                    dc_ji = np.real(np.fft.ifftn(2.0j * np.pi * ki_i * c3d_hat))
+                    val = (phi_f_mean if i == j else 0.0) + Lj * float(np.mean(phi_f * dc_ji))
+                    D_tensor[i, j] = val
+            for k in range(3):
+                D_tensor[k, k] = max(D_tensor[k, k], 0.0)
+            D_result = D_tensor.ravel()
+        else:
+            D_result = D_eff_ad
+
+        self._result = np.concatenate([D_result, K_eff])
         self._fields = fields
         diagnostics = _field_diagnostics(phi_s, phi_f)
-        _add_directional_diagnostics(diagnostics, "advdiff_diffusivity", D_eff_ad)
+        _add_directional_diagnostics(diagnostics, "advdiff_diffusivity", D_result)
         _add_directional_diagnostics(diagnostics, "permeability", K_eff)
         self._diagnostics = diagnostics
         return self._result

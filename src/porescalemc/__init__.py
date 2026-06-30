@@ -43,7 +43,9 @@ from porescalemc.config import (
 )
 from porescalemc.geometry.placement import sample_packing_from_name
 from porescalemc.geometry.fourier_field import (
+    plot_field_slices,
     save_structured_vti,
+    save_structured_vti_fields,
     save_spectral_fields_to_vti,
 )
 from porescalemc.solvers.fourier import FourierSolver
@@ -53,11 +55,22 @@ from porescalemc.solvers.spectral import (
     SpectralStokesSolver,
     SpectralAdvectionDiffusionSolver,
 )
+from porescalemc.solvers.tet import TetDiffusionSolver
+from porescalemc.solvers.voxel import VoxelDiffusionSolver
+from porescalemc.solvers.registry import available_qois, available_solvers, solver_class
 from porescalemc.mlmc.estimator import MLMCEstimator
 from porescalemc.mlmc.statistics import (
+    estimate_observed_rates,
     estimate_mlmc_work,
+    mlmc_diagnostics_report,
     mlmc_speedup_report,
 )
+
+try:
+    from porescalemc.geometry.mesher import GmshPackingMesher
+    from porescalemc.solvers.gmsh_mesher import GmshMesherQoISolver
+except ImportError:
+    pass
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

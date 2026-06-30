@@ -765,6 +765,7 @@ All analytical transforms and reconstruction live in \texttt{porescalemc/geometr
   \item \texttt{porosity\_field} performs the IFFT normalization $\phi_s = \operatorname{Re}(\mathcal{F}^{-1}[F K]) \cdot N / V$ followed by clipping.
   \item \texttt{upscaled\_permeability} applies the chosen closure law (via \texttt{porescalemc/geometry/transforms.py}) to the reconstructed solid-fraction field and returns the harmonic mean.
   \item Structure factor, autocorrelation, and correlation length functions are also provided for REV analysis.
+  \item \texttt{save\_structured\_vti\_fields}, \texttt{save\_spectral\_fields\_to\_vti}, and \texttt{plot\_field\_slices} provide lightweight post-processing of geometry and solver fields. The VTI writer emits XML VTK ImageData files readable by ParaView without a VTK dependency.
 \end{itemize}
 
 \subsection{MLMC Estimator and Statistics}
@@ -776,6 +777,7 @@ All analytical transforms and reconstruction live in \texttt{porescalemc/geometr
       \item \texttt{compute\_mlmc\_stats} implements the telescoping estimator, unbiased variances, and statistical error.
       \item \texttt{optimal\_sample\_counts} implements the Giles allocation formula.
       \item \texttt{check\_convergence} performs the bias/statistical-error test.
+      \item \texttt{estimate\_observed\_rates} and \texttt{mlmc\_diagnostics\_report} expose the measured finite-level mean increments, variances, work per sample, sample counts, and fitted $\alpha,\beta,\gamma$ rates. These are diagnostic summaries of the actually observed hierarchy, not assumptions required by the allocation formula.
       \item Richardson-style bias extrapolation is activated when \texttt{MLMCConfig.extrapolate\_bias = True}.
     \end{itemize}
   \item[Parallelism] \texttt{workers.py} uses \texttt{concurrent.futures.ProcessPoolExecutor} with name-based task distribution.
@@ -786,6 +788,10 @@ All analytical transforms and reconstruction live in \texttt{porescalemc/geometr
   \item[Protocol] \texttt{porescalemc/solvers/base.py} defines the minimal \texttt{SolverProtocol} (setup/solve/close) consumed by the MLMC engine.
   \item[Packing QoIs] \texttt{porescalemc/solvers/packing.py}: \texttt{PackingStatsSolver} returns the vector of algebraic descriptors listed in Section~\ref{sec:results}.
   \item[Fourier QoIs] \texttt{porescalemc/solvers/fourier.py}: \texttt{FourierSolver} returns mean solid fraction (from the smoothed field) and upscaled permeability.
+  \item[Spectral PDE QoIs] \texttt{porescalemc/solvers/spectral.py}: \texttt{SpectralDiffusionSolver}, \texttt{SpectralStokesSolver}, and \texttt{SpectralAdvectionDiffusionSolver} solve periodic VPM cell problems on the Fourier grid. For \texttt{n\_directions=3}, the diffusion and permeability paths expose flattened $3\times3$ tensors.
+  \item[Voxel diffusion] \texttt{porescalemc/solvers/voxel.py}: \texttt{VoxelDiffusionSolver} solves an independent periodic finite-volume diffusion cell problem on a voxelized Fourier field. This provides a useful cross-check against the pseudo-spectral discretization.
+  \item[Tetrahedral mesh bridge] \texttt{porescalemc/geometry/mesher.py}, \texttt{porescalemc/solvers/gmsh\_mesher.py}, and \texttt{porescalemc/solvers/tet.py}: optional Gmsh-based mesh generation supports oriented ellipsoids through affine transformations of the unit sphere. The current \texttt{TetDiffusionSolver} returns a mesh-backed Bruggeman diffusivity estimate plus mesh porosity and element count; full finite-element assembly remains future work.
+  \item[Discovery] \texttt{porescalemc/solvers/registry.py}: \texttt{available\_solvers()}, \texttt{available\_qois()}, and \texttt{solver\_class()} provide a user-facing list of built-in solver adapters and their QoI names.
 \end{description}
 
 \subsection{Configuration}
@@ -802,7 +808,8 @@ High-level convenience functions are exposed via \texttt{porescalemc.run\_mlmc} 
 \subsection{Entry Points and Examples}
 \begin{itemize}
   \item \texttt{examples/pure\_python\_mlmc.py} -- demonstrates both fixed and adaptive runs with packing statistics.
-  \item Tests in \texttt{tests/} cover geometry primitives, Fourier round-trips, pair-name coupling, and synthetic MLMC rate recovery.
+  \item \texttt{examples/spectral\_mlmc.py} and \texttt{examples/spectral\_solvers.py} -- demonstrate spectral diffusion/Stokes/advection-diffusion, VTI export, observed MLMC diagnostics, and speedup reporting.
+  \item Tests in \texttt{tests/} cover geometry primitives, Fourier round-trips, pair-name coupling, synthetic MLMC rate recovery, spectral tensor outputs, voxel diffusion, and optional Gmsh meshing guards. Actual Gmsh mesh generation is opt-in via an environment variable.
 \end{itemize}
 
 This mapping ensures that every formula in the main text has a direct, traceable counterpart in the source code.
