@@ -357,22 +357,26 @@ class MLMCEstimator:
             ax_var.semilogy(levels, vars_v, "s--", label=f"QoI {v}")
 
         rates = estimate_observed_rates(stats, refratio=self.mlmc_config.refratio)
+
+        def _fmt_rate(v: float) -> str:
+            return f"{v:.2g}" if np.isfinite(v) else "n/a"
+
         ax_mean.set_xlabel("Level ell")
         ax_mean.set_ylabel("|E[Q_l - Q_{l-1}]|")
-        ax_mean.set_title(f"Mean increments (alpha~{rates['alpha_hat']:.2g})")
+        ax_mean.set_title(f"Mean increments (alpha~{_fmt_rate(rates['alpha_hat'])})")
         ax_mean.grid(True)
         ax_mean.legend()
 
         ax_var.set_xlabel("Level ell")
         ax_var.set_ylabel("Var[Q_l - Q_{l-1}]")
-        ax_var.set_title(f"Variance (beta~{rates['beta_hat']:.2g})")
+        ax_var.set_title(f"Variance (beta~{_fmt_rate(rates['beta_hat'])})")
         ax_var.grid(True)
         ax_var.legend()
 
         ax_work.semilogy(levels, stats.work, "d-", color="tab:green")
         ax_work.set_xlabel("Level ell")
         ax_work.set_ylabel("Average work per sample")
-        ax_work.set_title(f"Cost growth (gamma~{rates['gamma_hat']:.2g})")
+        ax_work.set_title(f"Cost growth (gamma~{_fmt_rate(rates['gamma_hat'])})")
         ax_work.grid(True)
 
         ax_samples.bar(levels, stats.n_samples, color="tab:purple", alpha=0.8)

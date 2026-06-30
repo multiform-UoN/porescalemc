@@ -74,12 +74,14 @@ _AXIS_NAMES = ["x", "y", "z"]
 
 
 def _field_diagnostics(phi_s: np.ndarray, phi_f: np.ndarray) -> dict[str, float]:
-    """Calculate basic scalar statistics of the solid indicator field."""
+    """Scalar statistics of the solid/fluid indicator fields."""
     return {
-        "porosity_mean": float(phi_f.mean()),
         "solid_fraction_mean": float(phi_s.mean()),
-        "porosity_min": float(phi_f.min()),
-        "porosity_max": float(phi_f.max()),
+        "solid_fraction_min":  float(phi_s.min()),
+        "solid_fraction_max":  float(phi_s.max()),
+        "porosity_mean":       float(phi_f.mean()),
+        "porosity_min":        float(phi_f.min()),
+        "porosity_max":        float(phi_f.max()),
     }
 
 
