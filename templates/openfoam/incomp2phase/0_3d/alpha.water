@@ -1,0 +1,65 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2.4.0                                 |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      alphawater;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 0 0 0 0 0 0];
+
+#include "../contactangle"
+#include "../time"
+#include "../pressure"
+
+internalField   uniform 1;
+
+boundaryField
+{
+    #include "${WM_PROJECT_DIR}/etc/caseDicts/setConstraintTypes"
+    ".*(Y|Z)"
+    {
+        type            $lateralbcter;
+        theta0          $contactangle;
+        limit           gradient;
+        value           uniform $lateralbcvalter;
+    }
+    minX
+    {
+        uniformValue    table
+        (
+            (0     $inletbcvalter)
+            ($timeinj1   $inletbcvalter)
+            ($timeinj2   0)
+            ($timetot    0)
+        );
+        type            $inletbcter; // should be uniformFixedValue;
+        value           uniform $inletbcvalter;
+        theta0          $contactangle;
+        limit           gradient;
+    }
+    maxX
+    {
+        type            $outletbcter;
+        theta0          $contactangle;
+        limit           gradient;
+        value           uniform $outletbcvalter;
+    }
+    pores
+    {
+        type            $poresbcter; //constantAlphaContactAngle;
+        theta0          $contactangle;
+        limit           gradient;
+        value           uniform $poresbcvalter;
+    }
+}
+
+// ************************************************************************* //

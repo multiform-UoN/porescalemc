@@ -1,0 +1,17 @@
+#!/bin/bash
+cd ${0%/*} || exit 1    # run from this directory
+
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+# Get application name
+application=`getApplication`
+
+echo "Meshing"
+foamJob -screen blockMesh
+foamJob -screen decomposePar
+foamJob -screen -parallel snappyHexMesh -overwrite
+
+touch paraview.foam
+./qoi.sh log
+
+# ----------------------------------------------------------------- end-of-file

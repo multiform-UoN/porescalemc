@@ -1,0 +1,131 @@
+    #include "../time"
+    post
+    {
+        // Load the library containing the 'coded' functionObject
+        functionObjectLibs ("libutilityFunctionObjects.so");
+        type coded;
+        // Name of on-the-fly generated functionObject
+        redirectType post;
+        enabled true;
+        writeInterval $timeout;
+        outputControl adjustableTime;
+        code
+        #{
+            IOdictionary postDict
+            (
+                IOobject
+                (
+                "postDict",
+                 "system",
+                 mesh(),
+                 IOobject::MUST_READ,
+                 IOobject::NO_WRITE
+                )
+            );
+            static autoPtr<OFstream> osp;
+            if(!osp.valid())
+            {
+                fileName outputFile("post_out");
+                osp.set(new OFstream(outputFile));
+            }
+            OFstream &os = osp();
+            wordList volFields;
+            wordList surFields;
+            wordList patchNames;
+            postDict.lookup("volFields") >> volFields;
+            postDict.lookup("surFields") >> surFields;
+            postDict.lookup("patches") >> patchNames;
+            word fieldName;
+
+
+            // VOLUME OPERATION
+            os() << "domain volume SUM " << gSum(mesh().cellVolumes()) << endl;
+            forAll(volFields,i)
+            {
+                const word& fieldName = volFields[i];
+                if (mesh().foundObject<volVectorField>(fieldName))
+                {
+                    const volVectorField& var = mesh().lookupObject<volVectorField>(fieldName);
+                    os() << "domain "<< fieldName << " SUM " << (fvc::domainIntegrate(var)).value() << endl;
+                    volScalarField magv(mag(var));
+                    os() << "domain " << fieldName << " MAX " << gMax(magv) << endl;
+                    os() << "domain " << fieldName << " MIN " << gMin(magv) << endl;
+                    os() << "domain " << fieldName << " NORML1 " << (fvc::domainIntegrate(magv)).value() << endl;
+                    os() << "domain " << fieldName << " NORML2 " << (fvc::domainIntegrate(pow(magv,2))).value() << endl;
+                    volTensorField gradv(fvc::grad(var));
+                    os() << "domain " << fieldName << " GRADSUM " << (fvc::domainIntegrate(gradv)).value() << endl;
+                    os() << "domain " << fieldName << " GRADNORML1 " << (fvc::domainIntegrate(mag(gradv))).value() << endl;
+                    os() << "domain " << fieldName << " GRADNORML2 " << (fvc::domainIntegrate(magSqr(gradv))).value() << endl;
+                    os() << "domain " << fieldName << " SHEAR " << (fvc::domainIntegrate(magSqr(dev(twoSymm(gradv))))).value() << endl;
+                    volScalarField vor = mag(fvc::curl(var));
+                    os() << "domain " << fieldName << " VORTSUM " << (fvc::domainIntegrate(vor)).value() << endl;
+                    os() << "domain " << fieldName << " VORTMAX " << gMax(vor) << endl;
+                }
+                else if (mesh().foundObject<volScalarField>(fieldName))
+                {
+                    const volScalarField& var = mesh().lookupObject<volScalarField>(fieldName);
+                    os() << "domain " << fieldName << " SUM " << (fvc::domainIntegrate(var)).value() << endl;
+                    volScalarField magv(mag(var));
+                    os() << "domain " << fieldName << " MAX " << gMax(magv) << endl;
+                    os() << "domain " << fieldName << " MIN " << gMin(magv) << endl;
+                    os() << "domain " << fieldName << " NORML1 " << (fvc::domainIntegrate(magv)).value() << endl;
+                    os() << "domain " << fieldName << " NORML2 " << (fvc::domainIntegrate(pow(magv,2))).value() << endl;
+                    volVectorField gradv(fvc::grad(var));
+                    os() << "domain " << fieldName << " GRADSUM " << (fvc::domainIntegrate(gradv)).value() << endl;
+                    os() << "domain " << fieldName << " GRADNORML1 " << (fvc::domainIntegrate(mag(gradv))).value() << endl;
+                    os() << "domain " << fieldName << " GRADNORML2 " << (fvc::domainIntegrate(magSqr(gradv))).value() << endl;
+                }
+            }
+            
+            // SURFACE OPERATION
+            forAll(patchNames,j)
+            {
+                const word patchName = patchNames[j];
+                const label patchI = mesh().boundaryMesh().findPatchID(patchName);
+                if (patchI < 0) continue;
+                os() <<  patchName << " area SUM " << gSum(mesh().magSf().boundaryField()[patchI]) << endl;
+            }
+            forAll(surFields,i)
+            {
+                const word& fieldName = surFields[i];
+                if (mesh().foundObject<volVectorField>(fieldName))
+                {
+                    const volVectorField& var = mesh().lookupObject<volVectorField>(fieldName);
+                    surfaceVectorField svar=fvc::interpolate(var);
+                    surfaceVectorField ngradv=fvc::snGrad(var);
+                    volTensorField gradv=fvc::grad(var);
+                    surfaceTensorField sgradv=fvc::interpolate(gradv);
+                    volSymmTensorField shear=dev(twoSymm(gradv));
+                    forAll(patchNames,j)
+                    {
+                        const word patchName = patchNames[j];
+                        const label patchI = mesh().boundaryMesh().findPatchID(patchName);
+                        if (patchI < 0) continue;
+                        os  <<  patchName << " " << fieldName << " SUM " << gSum(mesh().magSf().boundaryField()[patchI]*svar.boundaryField()[patchI]) << endl;
+                        os  <<  patchName << " " << fieldName << " ORIENTEDSUM " << gSum(mesh().Sf().boundaryField()[patchI] & svar.boundaryField()[patchI]) << endl;
+                        os  <<  patchName << " " << fieldName << " GRADNORMALSUM " << gSum(mesh().magSf().boundaryField()[patchI]*ngradv.boundaryField()[patchI]) << endl;
+                        os  <<  patchName << " " << fieldName << " GRADSUM " << gSum(mesh().magSf().boundaryField()[patchI] * sgradv.boundaryField()[patchI]) << endl;
+                        os  <<  patchName << " " << fieldName << " SHEAR " << gSum(mesh().Sf().boundaryField()[patchI] & shear.boundaryField()[patchI]) << endl;
+                    }
+                }
+                else if (mesh().foundObject<volScalarField>(fieldName))
+                {
+                    const volScalarField& var = mesh().lookupObject<volScalarField>(fieldName);
+                    surfaceScalarField svar=fvc::interpolate(var);
+                    surfaceScalarField ngradv=fvc::snGrad(var);
+                    volVectorField gradv=fvc::grad(var);
+                    surfaceVectorField sgradv=fvc::interpolate(gradv);
+                    forAll(patchNames,j)
+                    {
+                        const word patchName = patchNames[j];
+                        const label patchI = mesh().boundaryMesh().findPatchID(patchName);
+                        if (patchI < 0) continue;
+                        os  <<  patchName << " " << fieldName << " SUM " << gSum(mesh().magSf().boundaryField()[patchI]*svar.boundaryField()[patchI]) << endl;
+                        os  <<  patchName << " " << fieldName << " ORIENTEDSUM " << gSum(mesh().Sf().boundaryField()[patchI]*svar.boundaryField()[patchI]) << endl;
+                        os  <<  patchName << " " << fieldName << " GRADNORMALSUM " << gSum(mesh().magSf().boundaryField()[patchI]*ngradv.boundaryField()[patchI]) << endl;
+                        os  <<  patchName << " " << fieldName << " GRADSUM " << gSum(mesh().magSf().boundaryField()[patchI]* sgradv.boundaryField()[patchI]) << endl;
+                    }
+                }
+            }
+        #};
+    }
