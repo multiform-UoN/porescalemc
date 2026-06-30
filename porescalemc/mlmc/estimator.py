@@ -101,7 +101,7 @@ class PairSampler:
                 # random realisation at both resolutions, maximising the covariance
                 # Cov(Q_l, Q_{l-1}) and minimising Var[Q_l - Q_{l-1}].
                 packing_coarse = self.geometry_factory(level - 1, name, p_cfg_coarse)
-                q_coarse = self._solve_qoi(packing_coarse)
+                q_coarse = self._solve_qoi(packing_coarse, level - 1)
             except Exception as exc:
                 _log.warning("Coarse solve failed at level %d: %s", level, exc)
                 return None
@@ -112,7 +112,7 @@ class PairSampler:
         p_cfg_fine, _ = hierarchy_level(self.mlmc_config, self.packing_config, level)
         try:
             packing_fine = self.geometry_factory(level, name, p_cfg_fine)
-            q_fine = self._solve_qoi(packing_fine)
+            q_fine = self._solve_qoi(packing_fine, level)
         except Exception as exc:
             _log.warning("Fine solve failed at level %d: %s", level, exc)
             return None
@@ -134,8 +134,21 @@ class PairSampler:
             # Return [dQ, Q] = [Q_l - Q_{l-1}, Q_l] packed into one array.
             return np.concatenate([q_fine - q_coarse, q_fine])
 
-    def _solve_qoi(self, packing: Packing) -> np.ndarray:
-        solver = self.solver_factory(packing)
+    def _solve_qoi(self, packing: Packing, level: int = 0) -> np.ndarray:
+        """Run the solver and extract QoI, passing level to level-aware factories.
+
+        A factory is considered level-aware only when its second positional
+        parameter is explicitly named ``level``.  This convention avoids
+        accidentally passing the level integer to factories whose second
+        argument happens to serve a different purpose (e.g. qoi_names).
+        """
+        import inspect
+        params = list(inspect.signature(self.solver_factory).parameters)
+        # Level-aware iff second param is named exactly 'level'
+        if len(params) >= 2 and params[1] == "level":
+            solver = self.solver_factory(packing, level)
+        else:
+            solver = self.solver_factory(packing)
         try:
             solver.setup(packing)
             raw = solver.solve()

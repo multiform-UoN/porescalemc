@@ -438,6 +438,114 @@ To compute transport properties, we solve partial differential equations within 
     \end{equation}
 \end{itemize}
 
+\subsection{Volume Penalisation Method (VPM) Spectral Solvers}
+\label{sec:vpm}
+
+The VPM embeds the solid geometry into a periodic domain by introducing a
+penalty field $\phi_s(\x) \in [0,1]$ (the solid fraction, reconstructed from
+the analytical Fourier representation of Sec.~\ref{sec:fourier}).  All
+equations are solved on a regular Cartesian grid using the Fast Fourier
+Transform (FFT), avoiding body-fitted meshes entirely.
+
+\subsubsection*{Diffusion cell problem (Dirichlet VPM)}
+
+Decompose the concentration as $c(\x) = x_i/L_i + \tilde{c}(\x)$ where
+$x_i/L_i$ is the imposed mean gradient (unit gradient in direction $i$) and
+$\tilde{c}$ is a periodic fluctuation. Substituting into the VPM penalised
+diffusion equation $-D_0\nabla^2 c + (\phi_s/\eta)c = 0$ yields
+\begin{equation}
+  \mathcal{A}\tilde{c} = -\frac{\phi_s}{\eta}\frac{x_i}{L_i},
+  \qquad
+  \mathcal{A} = -D_0\nabla^2 + \frac{\phi_s}{\eta}.
+\end{equation}
+The operator $\mathcal{A}$ is symmetric positive definite and is solved by
+preconditioned Conjugate Gradient (CG). A Fourier preconditioner
+$\mathcal{M}^{-1}$ approximates $\mathcal{A}$ by replacing the variable
+coefficient $\phi_s/\eta$ with its mean:
+\begin{equation}
+  \mathcal{M}^{-1} r = \mathcal{F}^{-1}\!\left[
+    \frac{\hat{r}(\k)}{4\pi^2 D_0|\k|^2 + \bar{\phi}_s/\eta}
+  \right].
+\end{equation}
+The effective diffusivity follows from the volume-averaged flux:
+\begin{equation}
+  \frac{D_{\text{eff},i}}{D_0}
+  = \phi_{f,\text{mean}} + L_i \left\langle
+      (1-\phi_s)\,\frac{\partial\tilde{c}}{\partial x_i}
+    \right\rangle.
+  \label{eq:Deff}
+\end{equation}
+For an empty domain ($\phi_s = 0$) the RHS is zero, $\tilde{c} = 0$, and
+Eq.~\eqref{eq:Deff} correctly gives $D_{\text{eff}} = D_0$.
+
+\subsubsection*{Neumann (no-flux) VPM}
+
+With a variable diffusivity $D(\x) = D_0(1-\phi_s(\x))$ that vanishes
+inside grains, the cell problem becomes
+\begin{equation}
+  \mathcal{A}_N\tilde{c} = -\frac{D_0}{L_i}\frac{\partial\phi_s}{\partial x_i},
+  \qquad
+  \mathcal{A}_N = -\nabla\cdot\bigl(D_0(1-\phi_s)\nabla\bigr) + \varepsilon_\text{reg}.
+\end{equation}
+The same effective diffusivity formula~\eqref{eq:Deff} applies.
+
+\subsubsection*{Stokes flow (Richardson iteration)}
+
+For Stokes flow with body force $\bff = \bfe_i$, the VPM penalised equations
+\begin{equation}
+  \mu\nabla^2\bfu - \nabla p - \frac{\phi_s}{\eta}\bfu + \bff = 0,
+  \quad \nabla\cdot\bfu = 0,
+\end{equation}
+are solved by a Richardson iteration with solenoidal projection:
+\begin{equation}
+  \hat{\bfu}^{n+1} = P_\text{sol}\!\left[
+    \frac{\lambda\hat{\bfu}^n
+          - \widehat{(\phi_s/\eta)\bfu^n}
+          + \hat{\bff}}
+         {\mu\,4\pi^2|\k|^2 + \lambda}
+  \right],
+\end{equation}
+where $P_\text{sol}(\hat\bfv)_k = \hat\bfv_k - (\hat\bfv_k\cdot\hat\k)\hat\k$
+is the divergence-free projector and $\lambda$ is the Richardson damping
+parameter chosen as
+\begin{equation}
+  \lambda = \max\!\left(
+    \frac{\phi_{s,\max}}{\eta},\;
+    \frac{\mu}{4}(2\pi k_\text{Nyq})^2
+  \right), \quad k_\text{Nyq} = \frac{1}{2\min(\Delta x, \Delta y, \Delta z)}.
+\end{equation}
+The effective permeability in direction $i$ is $K_{\text{eff},i} =
+\langle u_i \rangle$ (with $\mu = 1$).  The Hasimoto~\cite{Hasimoto1959}
+analytical result for a simple-cubic dilute sphere array,
+\begin{equation}
+  K_H = \frac{R^2}{9\pi c_s}
+  \Bigl(1 - 1.7601\,c_s^{1/3} + c_s - 1.5593\,c_s^2\Bigr),
+\end{equation}
+is used as a validation benchmark.
+
+\subsubsection*{Advection-diffusion dispersion}
+
+At finite Peclet number $\mathrm{Pe}$, the cell problem includes the
+convection term driven by the Stokes velocity field $\bfu(\x)$:
+\begin{equation}
+  \mathcal{A}\tilde{c} = -\frac{\phi_s}{\eta}\frac{x_i}{L_i}
+    - \mathrm{Pe}\,\bfu\cdot\nabla\tilde{c}
+    - \mathrm{Pe}\,\frac{u_i}{L_i}.
+\end{equation}
+The advection term is non-symmetric; it is handled by an outer Picard
+fixed-point loop that treats $\bfu\cdot\nabla\tilde{c}^{(k)}$ as a source
+and applies the symmetric CG solver at each inner step.
+
+\subsubsection*{MLMC level hierarchy}
+
+The \texttt{SpectralConfig} dataclass exposes \texttt{resolution} and
+\texttt{eta} as the primary fidelity levers. The helper
+\texttt{spectral\_hierarchy\_level(cfg, level)} scales these by
+\texttt{resolution\_level\_factor\^{}level} and
+\texttt{eta\_level\_factor\^{}level} respectively, enabling the
+\texttt{PairSampler} to automatically increase resolution and tighten
+penalisation as the MLMC level increases.
+
 \subsection{Aitken Delta-Squared Extrapolation}
 During iterative solvers (such as SIMPLE or PISO couplings for pressure-velocity systems), the QoI sequence $\{x_n\}$ converges to a steady value. To accelerate this sequence and allow early termination at larger solver tolerances (e.g., $10^{-4}$ instead of $10^{-8}$), we apply the Aitken delta-squared transformation \citep{brezinski1996extrapolation}:
 \begin{equation}
@@ -622,6 +730,16 @@ C.~Jeong et al.
 \newblock Fourier-based characterization of random heterogeneous media.
 \newblock {\em Journal of Computational Physics}, 2023 (and references therein).
 
+\bibitem{angot1999penalization}
+P.~Angot, C.-H. Bruneau, and P.~Fabrie.
+\newblock A penalization method to take into account obstacles in incompressible flow.
+\newblock {\em Numerische Mathematik}, 81(4):497--520, 1999.
+
+\bibitem{monchiet2013polarization}
+V.~Monchiet, G.~Bonnet, and G.~Guyader.
+\newblock A polarization-based FFT method for computing the effective properties of materials with complex microstructures.
+\newblock {\em International Journal for Numerical Methods in Engineering}, 93(11):1144--1166, 2013.
+
 \end{thebibliography}
 
 \appendix
@@ -688,5 +806,76 @@ High-level convenience functions are exposed via \texttt{porescalemc.run\_mlmc} 
 \end{itemize}
 
 This mapping ensures that every formula in the main text has a direct, traceable counterpart in the source code.
+
+\section{Spectral Immersed Boundary / Volume Penalization Solvers}
+\label{app:spectral_solvers}
+
+The analytical Fourier representation $\phi_s(\x)$ of the solid indicator function can be directly integrated with the volume penalization method (VPM) \citep{angot1999penalization} to solve PDEs in the pore space without any grid generation or body-fitted meshing. This appendix outlines the mathematical formulation of simple pseudo-spectral solvers for diffusion, Stokes flow, and advection-diffusion on the periodic domain $\mathcal{B}$.
+
+\subsection{Brinkman / Volume Penalization Concept}
+In VPM, the solid domain $B$ is treated as a porous medium with a vanishingly small permeability or diffusion coefficient $\eta \ll 1$ (the penalization parameter, typically $\eta \in [10^{-8}, 10^{-6}]$). The boundary conditions on the fluid-solid interface $\Gamma$ are enforced implicitly by adding a penalization term proportional to $\frac{\phi_s(\x)}{\eta}$ to the governing equations.
+
+\subsection{Diffusion with Volume Penalization}
+The steady-state diffusion equation with solid phase absorption ($c = c_s$ inside the solid grains) is formulated on the entire domain $\mathcal{B}$ as:
+\begin{equation}
+\nabla^2 c(\x) - \frac{\phi_s(\x)}{\eta} (c(\x) - c_s) = 0
+\end{equation}
+To solve this equation using spectral methods, we introduce a reference linear term $\lambda c(\x)$ (with constant $\lambda > 0$) to both sides:
+\begin{equation}
+\nabla^2 c(\x) - \lambda c(\x) = \left( \frac{\phi_s(\x)}{\eta} - \lambda \right) c(\x) - \frac{\phi_s(\x)}{\eta} c_s
+\end{equation}
+Applying the Fourier transform, the Laplace operator becomes a diagonal algebraic multiplier $-4\pi^2 \|\kvec\|_2^2$:
+\begin{equation}
+\left( -4\pi^2 \|\kvec\|_2^2 - \lambda \right) \widehat{c}(\kvec) = \mathcal{F}\left[ \left( \frac{\phi_s(\x)}{\eta} - \lambda \right) c(\x) - \frac{\phi_s(\x)}{\eta} c_s \right]
+\end{equation}
+This yields a simple, highly convergent fixed-point iteration scheme:
+\begin{equation}
+\label{eq:spectral_diff_iter}
+\widehat{c}^{(n+1)}(\kvec) = \frac{\mathcal{F}\left[ \left( \lambda - \frac{\phi_s(\x)}{\eta} \right) c^{(n)}(\x) + \frac{\phi_s(\x)}{\eta} c_s \right]}{4\pi^2 \|\kvec\|_2^2 + \lambda}
+\end{equation}
+where the multiplication is performed pointwise in real space, and the division is performed in Fourier space. Convergence is optimized by setting $\lambda = \frac{1}{2\eta}$.
+
+\subsection{Stokes Flow with Brinkman Penalization}
+The steady Stokes equations driven by a constant body force $\mathbf{f}$ (representing a pressure gradient) with no-slip conditions ($\bfu = \mathbf{0}$) inside the grains are penalized as:
+\begin{equation}
+\mu \nabla^2 \bfu(\x) - \nabla p(\x) - \frac{\phi_s(\x)}{\eta} \bfu(\x) + \mathbf{f} = \mathbf{0}, \quad \nabla \cdot \bfu(\x) = 0
+\end{equation}
+Adding the reference term $\lambda \bfu(\x)$ and taking the Fourier transform:
+\begin{equation}
+\left( -\mu 4\pi^2 \|\kvec\|_2^2 - \lambda \right) \widehat{\bfu}(\kvec) - 2\pi i \kvec \widehat{p}(\kvec) = \mathcal{F}\left[ \left( \frac{\phi_s(\x)}{\eta} - \lambda \right) \bfu(\x) - \mathbf{f} \right]
+\end{equation}
+To eliminate the pressure term $\widehat{p}(\kvec)$, we apply the divergence-free projection operator $\mathbb{P}(\kvec) = I - \frac{\kvec \otimes \kvec}{\|\kvec\|_2^2}$ to both sides. Since $\kvec \cdot \widehat{\bfu} = 0$, we have $\mathbb{P}(\kvec) \widehat{\bfu} = \widehat{\bfu}$. This yields the iterative projection scheme:
+\begin{equation}
+\label{eq:spectral_stokes_iter}
+\widehat{\bfu}^{(n+1)}(\kvec) = \mathbb{P}(\kvec) \cdot \left[ \frac{\mathcal{F}\left[ \left( \lambda - \frac{\phi_s(\x)}{\eta} \right) \bfu^{(n)}(\x) + \mathbf{f} \right]}{\mu 4\pi^2 \|\kvec\|_2^2 + \lambda} \right]
+\end{equation}
+This Moulinec-Suquet type scheme \citep{monchiet2013polarization} enforces both the incompressibility constraint and the no-slip condition without requiring a pressure solver or body-fitted mesh.
+
+\subsection{Advection-Diffusion}
+The time-dependent advection-diffusion equation:
+\begin{equation}
+\frac{\partial c}{\partial t} + \bfu \cdot \nabla c = D_0 \nabla^2 c - \frac{\phi_s(\x)}{\eta} c
+\end{equation}
+is solved by time-marching. The advection term $\bfu \cdot \nabla c$ is computed pseudo-spectrally:
+\begin{enumerate}
+    \item Compute the spatial gradient in Fourier space: $\mathcal{F}[\nabla c](\kvec) = 2\pi i \kvec \widehat{c}(\kvec)$.
+    \item Transform the gradient back to real space: $\nabla c(\x) = \mathcal{F}^{-1}[\mathcal{F}[\nabla c]]$.
+    \item Compute the dot product $\bfu(\x) \cdot \nabla c(\x)$ pointwise in real space.
+    \item Transform back to Fourier space: $\mathcal{F}[\bfu \cdot \nabla c]$.
+\end{enumerate}
+Using a semi-implicit time-stepping scheme where diffusion is treated implicitly:
+\begin{equation}
+\widehat{c}^{n+1}(\kvec) = \frac{\widehat{c}^n(\kvec) - \Delta t \left( \mathcal{F}[\bfu \cdot \nabla c]^n(\kvec) + \mathcal{F}\left[ \frac{\phi_s}{\eta} c \right]^n(\kvec) \right)}{1 + \Delta t D_0 4\pi^2 \|\kvec\|_2^2}
+\end{equation}
+which is stable, high-order, and avoids spatial discretization errors.
+
+\subsection{Complexity and Feasibility}
+Implementing these spectral solvers in \texttt{porescalemc} is:
+\begin{itemize}
+    \item \textbf{i) Diffusion}: Very low complexity. Requires $\approx 30$ lines of NumPy/FFT code.
+    \item \textbf{ii) Stokes Flow}: Low to moderate complexity. The tensor projection operator $\mathbb{P}(\kvec)$ requires broadcasting, but the overall loop is compact.
+    \item \textbf{iii) Advection-Diffusion}: Moderate complexity. Requires a stable time-stepping loop and CFL limit checks for the advective term.
+\end{itemize}
+All three solvers can be implemented in pure Python and run on GPUs or multi-core CPUs via CuPy or NumPy.
 
 \end{document}

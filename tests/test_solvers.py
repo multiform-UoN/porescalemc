@@ -34,6 +34,27 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(result.shape, (2,))
         self.assertAlmostEqual(result[0], packing.porosity)
 
+    def test_spectral_solvers(self):
+        from porescalemc.solvers.spectral import SpectralDiffusionSolver, SpectralStokesSolver
+        from porescalemc.config import SpectralConfig
+
+        packing = Packing([Grain.sphere([0.0, 0.0, 0.0], 0.08)], box=np.ones(3))
+        cfg = SpectralConfig(resolution=8, eta=1e-3, max_iter=50, tol=1e-4, n_directions=1)
+
+        diff_solver = SpectralDiffusionSolver(spectral_config=cfg)
+        diff_solver.setup(packing)
+        qoi_diff = diff_solver.solve()
+        self.assertEqual(qoi_diff.shape, (1,))
+        self.assertTrue(np.isfinite(qoi_diff[0]))
+        self.assertGreater(qoi_diff[0], 0.0)
+
+        stokes_solver = SpectralStokesSolver(spectral_config=cfg)
+        stokes_solver.setup(packing)
+        qoi_stokes = stokes_solver.solve()
+        self.assertEqual(qoi_stokes.shape, (1,))
+        self.assertTrue(np.isfinite(qoi_stokes[0]))
+        self.assertGreater(qoi_stokes[0], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -208,6 +208,91 @@ class HierarchyLevel:
     n_grains_scale: float          # for 'n': n = n0 * n_grains_scale
 
 
+# ---------------------------------------------------------------------------
+# Spectral solver configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SpectralConfig:
+    """Parameters for the spectral VPM pore-scale solvers.
+
+    Resolution and eta are the primary levers exposed in the MLMC hierarchy:
+    - resolution controls grid density (points per unit length per dimension)
+    - eta is the VPM penalisation parameter (small → sharper grain surface)
+
+    VPM convergence error scales as O(√η) for Dirichlet and O(η) for Neumann;
+    Gibbs ringing scales as O(1/N) for the 'cell' smoothing kernel.
+
+    Fields
+    ------
+    resolution : float
+        FFT grid points per unit length per direction.  Passed to FourierConfig
+        when no explicit fourier_config is provided.
+    eta : float
+        VPM penalisation parameter.  Should satisfy eta << dx² / D0.
+    smoothing : str
+        Smoothing kernel for porosity field ('cell' | 'gaussian' | 'none').
+    smoothing_length : float
+        σ in grid-spacing units for the Gaussian kernel (ignored for 'cell').
+    max_iter : int
+        Maximum CG or Richardson iterations per direction solve.
+    tol : float
+        Relative residual tolerance for the iterative solver.
+    solver : str
+        Inner solver type.  'cg' uses preconditioned CG for the diffusion
+        operator (SPD); 'richardson' uses Richardson iteration (Stokes uses
+        Richardson regardless of this flag).
+    bc_solid : str
+        Immersed boundary condition for diffusion.
+        'dirichlet' — absorbing solid (c = 0 inside grains via VPM).
+        'neumann'   — no-flux solid (∂c/∂n = 0; VPM via variable diffusivity).
+    n_directions : int
+        Number of coordinate directions to solve (1, 2, or 3).  Returning
+        shape (n_directions,) keeps the default backward-compatible (1,).
+    resolution_level_factor : float
+        Multiplier on resolution per MLMC level (2.0 → double grid each level).
+    eta_level_factor : float
+        Multiplier on eta per MLMC level (1.0 → keep eta constant across levels).
+    peclet : float
+        Peclet number for SpectralAdvectionDiffusionSolver.  0 → pure diffusion.
+    """
+
+    resolution: float = 10.0
+    eta: float = 1e-5
+    smoothing: str = "cell"
+    smoothing_length: float = 1.0
+    max_iter: int = 1000
+    tol: float = 1e-7
+    solver: str = "cg"           # 'cg' | 'richardson'
+    bc_solid: str = "dirichlet"  # 'dirichlet' | 'neumann'
+    n_directions: int = 1        # 1 (default, backward-compat) | 2 | 3
+    resolution_level_factor: float = 2.0
+    eta_level_factor: float = 1.0
+    peclet: float = 0.0
+
+
+def spectral_hierarchy_level(spectral_cfg: "SpectralConfig", level: int) -> "SpectralConfig":
+    """Return a SpectralConfig scaled for MLMC level ``level``.
+
+    Parameters
+    ----------
+    spectral_cfg : SpectralConfig
+        Base (level-0) spectral configuration.
+    level : int
+        MLMC level index (0 = coarsest).
+
+    Returns
+    -------
+    SpectralConfig
+        A deep copy with resolution and eta scaled by their respective factors.
+    """
+    import copy
+    s = copy.deepcopy(spectral_cfg)
+    s.resolution = spectral_cfg.resolution * (spectral_cfg.resolution_level_factor ** level)
+    s.eta = spectral_cfg.eta * (spectral_cfg.eta_level_factor ** level)
+    return s
+
+
 def hierarchy_level(
     mlmc_cfg: MLMCConfig,
     packing_cfg: PackingConfig,

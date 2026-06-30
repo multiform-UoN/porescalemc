@@ -37,6 +37,8 @@ from porescalemc.config import (
     PackingConfig,
     MLMCConfig,
     FourierConfig,
+    SpectralConfig,
+    spectral_hierarchy_level,
 )
 from porescalemc.geometry.placement import sample_packing_from_name
 from porescalemc.solvers.fourier import FourierSolver
