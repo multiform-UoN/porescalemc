@@ -70,6 +70,26 @@ from porescalemc.solvers.base import SolverProtocol
 
 _log = logging.getLogger(__name__)
 
+_AXIS_NAMES = ["x", "y", "z"]
+
+
+def _field_diagnostics(phi_s: np.ndarray, phi_f: np.ndarray) -> dict[str, float]:
+    """Calculate basic scalar statistics of the solid indicator field."""
+    return {
+        "porosity_mean": float(phi_f.mean()),
+        "solid_fraction_mean": float(phi_s.mean()),
+        "porosity_min": float(phi_f.min()),
+        "porosity_max": float(phi_f.max()),
+    }
+
+
+def _add_directional_diagnostics(
+    diagnostics: dict[str, float], prefix: str, values: np.ndarray
+) -> None:
+    """Helper to populate Cartesian directional values into diagnostics."""
+    for idx, val in enumerate(values):
+        diagnostics[f"{prefix}_{_AXIS_NAMES[idx]}"] = float(val)
+
 
 # ---------------------------------------------------------------------------
 # FFT helpers
@@ -221,10 +241,14 @@ class SpectralDiffusionSolver(SolverProtocol):
         )
         self.packing: Packing | None = packing
         self._result: np.ndarray | None = None
+        self._fields: dict[str, np.ndarray] = {}
+        self._diagnostics: dict[str, float] = {}
 
     def setup(self, packing: Packing) -> None:
         self.packing = packing
         self._result = None
+        self._fields = {}
+        self._diagnostics = {}
 
     def solve(self) -> np.ndarray:
         if self.packing is None:
@@ -242,20 +266,37 @@ class SpectralDiffusionSolver(SolverProtocol):
 
         coords = [(xi, kx, Lx), (yi, ky, Ly), (zi, kz, Lz)]
         D_eff = np.zeros(self.cfg.n_directions)
+        fields: dict[str, np.ndarray] = {
+            "solid_fraction": phi_s.copy(),
+            "porosity": phi_f.copy(),
+        }
 
         for i, (coord, ki, Li) in enumerate(coords[: self.cfg.n_directions]):
             if self.cfg.bc_solid == "neumann":
-                D_eff[i] = self._solve_neumann(
+                D_eff[i], corrector = self._solve_neumann(
                     phi_s, phi_f, phi_f_mean, coord, ki, Li,
                     kx, ky, kz, k2, nx, ny, nz,
                 )
             else:
-                D_eff[i] = self._solve_dirichlet(
+                D_eff[i], corrector = self._solve_dirichlet(
                     phi_s, phi_f, phi_f_mean, coord, ki, Li, k2, nx, ny, nz,
                 )
+            fields[f"diffusion_corrector_{_AXIS_NAMES[i]}"] = corrector.copy()
 
         self._result = D_eff
+        self._fields = fields
+        diagnostics = _field_diagnostics(phi_s, phi_f)
+        _add_directional_diagnostics(diagnostics, "diffusivity", D_eff)
+        self._diagnostics = diagnostics
         return D_eff
+
+    def solution_fields(self) -> dict[str, np.ndarray]:
+        """Return cached fields from the last solve for plotting/VTI export."""
+        return dict(self._fields)
+
+    def diagnostics(self) -> dict[str, float]:
+        """Return scalar diagnostics from the last solve."""
+        return dict(self._diagnostics)
 
     # ------------------------------------------------------------------
     # Internal solves
@@ -263,7 +304,7 @@ class SpectralDiffusionSolver(SolverProtocol):
     def _solve_dirichlet(
         self, phi_s, phi_f, phi_f_mean,
         coord, ki, Li, k2, nx, ny, nz,
-    ) -> float:
+    ) -> tuple[float, np.ndarray]:
         eta = self.cfg.eta
         pen = phi_s / eta
         # Fourier preconditioner: approximate A with constant-coefficient operator
@@ -285,12 +326,13 @@ class SpectralDiffusionSolver(SolverProtocol):
         )
         c3d = c_tilde.reshape(nx, ny, nz)
         dc = np.real(np.fft.ifftn(2.0j * np.pi * ki * np.fft.fftn(c3d)))
-        return max(phi_f_mean + Li * float(np.mean(phi_f * dc)), 0.0)
+        D_eff = max(phi_f_mean + Li * float(np.mean(phi_f * dc)), 0.0)
+        return D_eff, c3d
 
     def _solve_neumann(
         self, phi_s, phi_f, phi_f_mean,
         coord, ki, Li, kx, ky, kz, k2, nx, ny, nz,
-    ) -> float:
+    ) -> tuple[float, np.ndarray]:
         eps_reg = 1e-8
         phi_f_avg = max(phi_f_mean, 1e-6)
 
@@ -317,7 +359,8 @@ class SpectralDiffusionSolver(SolverProtocol):
         )
         c3d = c_tilde.reshape(nx, ny, nz)
         dc = np.real(np.fft.ifftn(2.0j * np.pi * ki * np.fft.fftn(c3d)))
-        return max(phi_f_mean + Li * float(np.mean(phi_f * dc)), 0.0)
+        D_eff = max(phi_f_mean + Li * float(np.mean(phi_f * dc)), 0.0)
+        return D_eff, c3d
 
     def close(self) -> None:
         pass
@@ -381,6 +424,7 @@ class SpectralStokesSolver(SolverProtocol):
             raise RuntimeError("setup(packing) must be called first.")
 
         phi_s = porosity_field(self.packing, self.fourier_config)
+        phi_f = 1.0 - phi_s
         nx, ny, nz = phi_s.shape
         N = nx * ny * nz
         Lx, Ly, Lz = self.packing.box
@@ -437,7 +481,30 @@ class SpectralStokesSolver(SolverProtocol):
 
         self._velocity_fields = velocity_fields
         self._result = K_eff
+        fields: dict[str, np.ndarray] = {
+            "solid_fraction": phi_s.copy(),
+            "porosity": phi_f.copy(),
+        }
+        for direction, velocity in enumerate(velocity_fields):
+            force_axis = _AXIS_NAMES[direction]
+            for component, component_axis in enumerate(_AXIS_NAMES):
+                name = f"velocity_force_{force_axis}_{component_axis}"
+                fields[name] = velocity[component].copy()
+                if direction == 0:
+                    fields[f"u{component_axis}"] = velocity[component].copy()
+        self._fields = fields
+        diagnostics = _field_diagnostics(phi_s, phi_f)
+        _add_directional_diagnostics(diagnostics, "permeability", K_eff)
+        self._diagnostics = diagnostics
         return K_eff
+
+    def solution_fields(self) -> dict[str, np.ndarray]:
+        """Return cached fields from the last solve for plotting/VTI export."""
+        return dict(self._fields)
+
+    def diagnostics(self) -> dict[str, float]:
+        """Return scalar diagnostics from the last solve."""
+        return dict(self._diagnostics)
 
     def close(self) -> None:
         self._velocity_fields = None
@@ -488,10 +555,14 @@ class SpectralAdvectionDiffusionSolver(SolverProtocol):
         )
         self.packing: Packing | None = packing
         self._result: np.ndarray | None = None
+        self._fields: dict[str, np.ndarray] = {}
+        self._diagnostics: dict[str, float] = {}
 
     def setup(self, packing: Packing) -> None:
         self.packing = packing
         self._result = None
+        self._fields = {}
+        self._diagnostics = {}
 
     def solve(self) -> np.ndarray:
         if self.packing is None:
@@ -534,6 +605,18 @@ class SpectralAdvectionDiffusionSolver(SolverProtocol):
 
         coords = [(xi, kx, Lx), (yi, ky, Ly), (zi, kz, Lz)]
         D_eff_ad = np.zeros(self.cfg.n_directions)
+        fields: dict[str, np.ndarray] = {
+            "solid_fraction": phi_s.copy(),
+            "porosity": phi_f.copy(),
+        }
+        if vel_fields is not None:
+            for direction, velocity in enumerate(vel_fields):
+                force_axis = _AXIS_NAMES[direction]
+                for component, component_axis in enumerate(_AXIS_NAMES):
+                    name = f"velocity_force_{force_axis}_{component_axis}"
+                    fields[name] = velocity[component].copy()
+                    if direction == 0:
+                        fields[f"u{component_axis}"] = velocity[component].copy()
 
         for i, (coord, ki, Li) in enumerate(coords[: self.cfg.n_directions]):
             u_field = vel_fields[i]  # velocity field driven by e_i
@@ -566,9 +649,23 @@ class SpectralAdvectionDiffusionSolver(SolverProtocol):
             c3d_f = c_tilde.reshape(nx, ny, nz)
             dc = np.real(np.fft.ifftn(2.0j * np.pi * ki * np.fft.fftn(c3d_f)))
             D_eff_ad[i] = max(phi_f_mean + Li * float(np.mean(phi_f * dc)), 0.0)
+            fields[f"advdiff_corrector_{_AXIS_NAMES[i]}"] = c3d_f.copy()
 
         self._result = np.concatenate([D_eff_ad, K_eff])
+        self._fields = fields
+        diagnostics = _field_diagnostics(phi_s, phi_f)
+        _add_directional_diagnostics(diagnostics, "advdiff_diffusivity", D_eff_ad)
+        _add_directional_diagnostics(diagnostics, "permeability", K_eff)
+        self._diagnostics = diagnostics
         return self._result
+
+    def solution_fields(self) -> dict[str, np.ndarray]:
+        """Return cached fields from the last solve for plotting/VTI export."""
+        return dict(self._fields)
+
+    def diagnostics(self) -> dict[str, float]:
+        """Return scalar diagnostics from the last solve."""
+        return dict(self._diagnostics)
 
     def close(self) -> None:
         pass

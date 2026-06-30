@@ -7,7 +7,13 @@ import numpy as np
 from porescalemc.config import MLMCConfig, PackingConfig
 from porescalemc.geometry.grains import Grain, Packing
 from porescalemc.mlmc.estimator import MLMCEstimator, PairSampler
-from porescalemc.mlmc.statistics import check_convergence, compute_mlmc_stats, optimal_sample_counts
+from porescalemc.mlmc.statistics import (
+    check_convergence,
+    compute_mlmc_stats,
+    estimate_observed_rates,
+    mlmc_diagnostics_report,
+    optimal_sample_counts,
+)
 from porescalemc.solvers.packing import PackingStatsSolver
 
 
@@ -50,6 +56,26 @@ class MLMCTests(unittest.TestCase):
         stats = compute_mlmc_stats(samples, [0.3, 0.9], cfg)
         counts = optimal_sample_counts(stats, cfg)
         self.assertTrue(all(count >= 4 for count in counts))
+
+    def test_observed_rates_and_diagnostics_report(self):
+        """Finite-level diagnostics should expose measured mean/var/work data."""
+        samples = [
+            [np.array([1.0, 1.0]), np.array([1.4, 1.4]), np.array([0.6, 0.6])],
+            [np.array([0.25, 1.25]), np.array([0.35, 1.35]), np.array([0.15, 1.15])],
+            [np.array([0.06, 1.31]), np.array([0.08, 1.33]), np.array([0.04, 1.29])],
+        ]
+        cfg = MLMCConfig(min_samples=2, refratio=2.0)
+        stats = compute_mlmc_stats(samples, [0.3, 1.2, 4.8], cfg)
+
+        rates = estimate_observed_rates(stats, refratio=cfg.refratio)
+        report = mlmc_diagnostics_report(stats, cfg)
+
+        self.assertGreater(rates["alpha_hat"], 0.0)
+        self.assertGreater(rates["beta_hat"], 0.0)
+        self.assertGreater(rates["gamma_hat"], 0.0)
+        self.assertEqual(len(report["levels"]), 3)
+        self.assertEqual(len(report["optimal_samples"]), 3)
+        self.assertIn("total_work", report["levels"][0])
 
     def test_convergence_detects_large_bias(self):
         cfg = MLMCConfig(tolerance=0.01, error_split=0.5)

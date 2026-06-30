@@ -96,6 +96,30 @@ class MLMCStats:
         ]
         return "\n".join(lines)
 
+    def level_table(self) -> list[dict[str, float]]:
+        """Return finite-level diagnostics for each MLMC level.
+
+        The table is non-asymptotic: it reports exactly what was measured at
+        each level (mean increment, variance, sample count, and work).  For
+        vector QoIs the max absolute mean/variance over components is used as a
+        conservative scalar summary.
+        """
+        rows = []
+        for level, (mean, var, n, work) in enumerate(
+            zip(self.means, self.variances, self.n_samples, self.work)
+        ):
+            rows.append(
+                {
+                    "level": float(level),
+                    "mean_abs_max": float(np.max(np.abs(mean))),
+                    "variance_max": float(np.max(var)),
+                    "n_samples": float(n),
+                    "work_per_sample": float(work),
+                    "total_work": float(n * work),
+                }
+            )
+        return rows
+
 
 # ---------------------------------------------------------------------------
 # Sample variance (unbiased, Bessel-corrected)
@@ -282,6 +306,65 @@ def optimal_sample_counts(
 
 
 # ---------------------------------------------------------------------------
+# Finite-level diagnostics and observed rates
+# ---------------------------------------------------------------------------
+
+def _fit_log_rate(
+    values: np.ndarray,
+    refratio: float,
+    *,
+    decreasing: bool,
+) -> float:
+    """Fit ``values ~ C * refratio^(rate*l)`` on positive finite entries."""
+    levels = np.arange(len(values), dtype=float)
+    mask = np.isfinite(values) & (values > 0)
+    if mask.sum() < 2:
+        return float("nan")
+    slope = np.polyfit(levels[mask], np.log(values[mask]) / np.log(refratio), 1)[0]
+    return float(-slope if decreasing else slope)
+
+
+def estimate_observed_rates(
+    stats: MLMCStats,
+    refratio: float = 2.0,
+) -> dict[str, float]:
+    """Estimate observed ``alpha``, ``beta`` and ``gamma`` from level data.
+
+    These are diagnostics, not control parameters.  The estimator still uses
+    the measured finite-level variances and costs for allocation.
+
+    - ``alpha_hat`` comes from ``|E[Q_l-Q_{l-1}]|`` decay.
+    - ``beta_hat`` comes from ``Var[Q_l-Q_{l-1}]`` decay.
+    - ``gamma_hat`` comes from measured work-per-sample growth.
+    """
+    mean_abs = np.array([np.max(np.abs(m)) for m in stats.means], dtype=float)
+    var_max = np.array([np.max(v) for v in stats.variances], dtype=float)
+    work = np.array(stats.work, dtype=float)
+    return {
+        "alpha_hat": _fit_log_rate(mean_abs, refratio, decreasing=True),
+        "beta_hat": _fit_log_rate(var_max, refratio, decreasing=True),
+        "gamma_hat": _fit_log_rate(work, refratio, decreasing=False),
+    }
+
+
+def mlmc_diagnostics_report(
+    stats: MLMCStats,
+    config: MLMCConfig,
+) -> dict:
+    """Return a compact observed-data report for logging or notebooks."""
+    rates = estimate_observed_rates(stats, refratio=config.refratio)
+    return {
+        "estimator": stats.estimator,
+        "stat_error": stats.stat_error,
+        "bias": stats.bias,
+        "total_error": np.abs(stats.bias) + stats.stat_error,
+        "levels": stats.level_table(),
+        "observed_rates": rates,
+        "optimal_samples": optimal_sample_counts(stats, config),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Convergence check
 # ---------------------------------------------------------------------------
 
@@ -336,3 +419,121 @@ def check_convergence(
             f"exceeds {(1-theta) * tol:.3e}."
         )
     return False, reason
+
+
+# ---------------------------------------------------------------------------
+# Computational cost and speedup estimation (MLMC vs plain MC)
+# ---------------------------------------------------------------------------
+
+def estimate_mlmc_work(
+    variances: list[np.ndarray],
+    work_per_sample: list[float],
+    alpha: float,
+    beta: float,
+    gamma: float,
+    tol: float,
+    theta: float = 0.5,
+    min_samples: int = 5,
+) -> dict:
+    """Estimate the total computational work required by optimal MLMC.
+
+    This is the theoretical formula (Giles 2008 / 2015) used to predict
+    how much cheaper MLMC is than standard Monte Carlo for a given
+    tolerance.
+
+    The function returns both the optimal sample counts and the
+    estimated total work (in "work units" where work unit = cost of one
+    level-0 sample).
+
+    Parameters
+    ----------
+    variances : list of arrays
+        Var[dQ_ℓ] for each level (from MLMCStats or measured).
+    work_per_sample : list of float
+        Average cost (time or flop count) of one sample at that level.
+    alpha, beta, gamma : float
+        Classic MLMC rates (see MLMCConfig docstring).
+    tol : float
+        Target root-mean-square error (TOL).
+    theta : float
+        Fraction of tolerance assigned to bias (1-theta to statistical error).
+    min_samples : int
+        Lower bound on samples per level (for stability).
+
+    Returns
+    -------
+    dict with keys
+        M_opt : list[int]           optimal number of samples per level
+        total_work : float          sum(M_ℓ * W_ℓ)
+        mc_work : float             work of plain MC at the finest level
+        speedup : float             estimated MC_work / MLMC_work
+    """
+    n_levels = len(variances)
+    V = np.array([float(np.max(v)) for v in variances])   # conservative (max over QoIs)
+    W = np.array(work_per_sample)
+
+    # Optimal allocation (continuous version)
+    # M_ℓ ∝ sqrt(V_ℓ / W_ℓ) * sum sqrt(V W)
+    sqrt_VW = np.sqrt(V * W)
+    S = np.sum(sqrt_VW)
+    C = (1.0 / ((1.0 - theta) * tol)) ** 2
+    M_cont = C * S * sqrt_VW / W
+    M_opt = [max(min_samples, int(np.ceil(m))) for m in M_cont]
+
+    mlmc_work = sum(m * w for m, w in zip(M_opt, W))
+
+    # Plain MC cost to achieve the same *statistical* error using only the
+    # finest level (the realistic expensive scenario).
+    # We use a small floor on V to avoid division-by-zero in near-deterministic demos.
+    Vf = max(V[-1], 1e-12)
+    mc_work_fine = (C * Vf / W[-1]) * W[-1]
+
+    speedup = mc_work_fine / mlmc_work if mlmc_work > 0 else np.inf
+
+    return {
+        "M_opt": M_opt,
+        "total_mlmc_work": mlmc_work,
+        "plain_mc_work_finest": mc_work_fine,
+        "estimated_speedup": speedup,
+    }
+
+
+def mlmc_speedup_report(
+    samples: list[list[np.ndarray]],
+    work: list[float],
+    config: "MLMCConfig",
+) -> dict:
+    """Convenience wrapper that takes real MLMC run data and returns a
+    compact report with estimated speedup vs plain Monte Carlo.
+
+    The function first recomputes the statistics (so it can be called
+    after an MLMCEstimator.run()), then feeds the observed variances
+    and per-level work into estimate_mlmc_work.
+
+    The returned dict is intended to be printed or stored together with
+    the MLMC results.
+    """
+    from porescalemc.mlmc.statistics import compute_mlmc_stats
+
+    stats = compute_mlmc_stats(samples, work, config)
+    nvar = len(stats.estimator)
+
+    # Use the maximum variance over QoIs for a conservative estimate
+    var_per_level = [np.max(v) for v in stats.variances]
+    work_per_level = list(stats.work)
+
+    report = estimate_mlmc_work(
+        variances=[np.array([v]) for v in var_per_level],
+        work_per_sample=work_per_level,
+        alpha=config.alpha,
+        beta=config.beta,
+        gamma=config.gamma,
+        tol=config.tolerance,
+        theta=config.error_split,
+        min_samples=config.min_samples,
+    )
+    report["n_levels"] = len(samples)
+    report["final_estimator"] = stats.estimator
+    report["final_error"] = np.abs(stats.bias) + stats.stat_error
+    report["observed_n_samples"] = stats.n_samples
+    return report

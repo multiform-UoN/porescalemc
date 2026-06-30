@@ -10,6 +10,11 @@ from porescalemc.solvers.packing import (
     PackingStatsSolver,
     packing_statistics,
 )
+from porescalemc.solvers.spectral import (
+    SpectralAdvectionDiffusionSolver,
+    SpectralDiffusionSolver,
+    SpectralStokesSolver,
+)
 
 __all__ = [
     "SolverProtocol",
@@ -18,4 +23,7 @@ __all__ = [
     "PACKING_QOI_NAMES",
     "PackingStatsSolver",
     "packing_statistics",
+    "SpectralDiffusionSolver",
+    "SpectralStokesSolver",
+    "SpectralAdvectionDiffusionSolver",
 ]

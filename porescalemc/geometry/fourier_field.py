@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import logging
 import math
+from html import escape as xml_escape
 
 import numpy as np
 from numpy import fft as npfft
@@ -606,3 +607,224 @@ def upscaled_permeability(
     # region dominates, which is physically appropriate for pressure-driven flow.
     inv_K = 1.0 / np.where(K_field > 0, K_field, np.inf)
     return float(1.0 / inv_K.mean())
+
+
+# ---------------------------------------------------------------------------
+# Post-processing / offline visualisation helpers
+# ---------------------------------------------------------------------------
+
+def save_structured_vti_fields(
+    fields: dict[str, np.ndarray],
+    origin: tuple[float, float, float],
+    spacing: tuple[float, float, float],
+    filename: str,
+    active_scalar: str | None = None,
+) -> None:
+    """Write one or more 3-D scalar fields as XML VTK ImageData (.vti).
+
+    The writer is intentionally dependency-free and emits ASCII XML so the
+    files are easy to inspect in a text editor.  ParaView and VisIt can load
+    the result directly as regular point data.
+    """
+    if not fields:
+        raise ValueError("fields must contain at least one scalar array.")
+
+    arrays: dict[str, np.ndarray] = {}
+    shape: tuple[int, int, int] | None = None
+    for name, field in fields.items():
+        arr = np.asarray(field, dtype=np.float32)
+        if arr.ndim != 3:
+            raise ValueError(f"Field {name!r} must be 3-D, got shape {arr.shape}.")
+        if shape is None:
+            shape = arr.shape
+        elif arr.shape != shape:
+            raise ValueError(
+                f"Field {name!r} has shape {arr.shape}; expected {shape}."
+            )
+        arrays[str(name)] = arr
+
+    assert shape is not None
+    nx, ny, nz = shape
+    ox, oy, oz = origin
+    dx, dy, dz = spacing
+    active = active_scalar if active_scalar in arrays else next(iter(arrays))
+    extent = f"0 {nx - 1} 0 {ny - 1} 0 {nz - 1}"
+
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write('<?xml version="1.0"?>\n')
+        f.write('<VTKFile type="ImageData" version="0.1" byte_order="LittleEndian">\n')
+        f.write(
+            f'  <ImageData WholeExtent="{extent}" '
+            f'Origin="{ox:.12g} {oy:.12g} {oz:.12g}" '
+            f'Spacing="{dx:.12g} {dy:.12g} {dz:.12g}">\n'
+        )
+        f.write(f'    <Piece Extent="{extent}">\n')
+        f.write(f'      <PointData Scalars="{xml_escape(active)}">\n')
+
+        for name, arr in arrays.items():
+            f.write(
+                f'        <DataArray type="Float32" Name="{xml_escape(name)}" '
+                'NumberOfComponents="1" format="ascii">\n'
+            )
+            flat = arr.ravel(order="F")
+            for start in range(0, flat.size, 8):
+                chunk = flat[start:start + 8]
+                values = " ".join(f"{float(value):.8e}" for value in chunk)
+                f.write(f"          {values}\n")
+            f.write("        </DataArray>\n")
+
+        f.write("      </PointData>\n")
+        f.write("      <CellData/>\n")
+        f.write("    </Piece>\n")
+        f.write("  </ImageData>\n")
+        f.write("</VTKFile>\n")
+
+
+def save_structured_vti(
+    field: np.ndarray,
+    origin: tuple[float, float, float],
+    spacing: tuple[float, float, float],
+    filename: str,
+    field_name: str = "scalar",
+) -> None:
+    """Write a single 3-D numpy array as XML VTK ImageData (.vti)."""
+    save_structured_vti_fields(
+        {field_name: field},
+        origin,
+        spacing,
+        filename,
+        active_scalar=field_name,
+    )
+
+
+def save_spectral_fields_to_vti(
+    solver,
+    packing,
+    fourier_config,
+    base_name: str = "spectral",
+) -> None:
+    """Convenience wrapper that exports common fields from a spectral solver.
+
+    Writes:
+      - ``{base_name}_fields.vti`` with all cached solver fields
+      - ``{base_name}_solid_fraction.vti`` and ``{base_name}_porosity.vti``
+        for quick standalone inspection
+
+    For Stokes / advection-diffusion solvers that store internal velocity
+    or corrector fields, the combined file includes those arrays too.
+
+    This gives you a structured mesh that visualises both the (smoothed)
+    geometry and the solution fields inside ParaView without any surface
+    meshing.
+    """
+    # Always have the solid fraction on the solver grid
+    phi_s = porosity_field(packing, fourier_config)
+    origin = tuple(-np.array(packing.box) / 2.0)   # centered box convention
+    Lx, Ly, Lz = packing.box
+    nx, ny, nz = phi_s.shape
+    spacing = (Lx / nx, Ly / ny, Lz / nz)
+
+    fields: dict[str, np.ndarray] = {}
+    if hasattr(solver, "solution_fields"):
+        fields = {
+            name: np.asarray(field)
+            for name, field in solver.solution_fields().items()
+            if np.asarray(field).shape == phi_s.shape
+        }
+    fields.setdefault("solid_fraction", phi_s)
+    fields.setdefault("porosity", 1.0 - phi_s)
+
+    save_structured_vti_fields(
+        fields,
+        origin,
+        spacing,
+        f"{base_name}_fields.vti",
+        active_scalar="solid_fraction",
+    )
+
+    save_structured_vti(
+        phi_s, origin, spacing,
+        f"{base_name}_solid_fraction.vti", "solid_fraction"
+    )
+    save_structured_vti(
+        1.0 - phi_s, origin, spacing,
+        f"{base_name}_porosity.vti", "porosity"
+    )
+
+    # If the solver kept velocity fields (Stokes / AdvectionDiffusion)
+    if hasattr(solver, "_velocity_fields") and solver._velocity_fields is not None:
+        vel = solver._velocity_fields[0]   # take first direction for demo
+        for comp, name in enumerate(["ux", "uy", "uz"]):
+            save_structured_vti(
+                vel[comp], origin, spacing,
+                f"{base_name}_{name}.vti", name
+            )
+
+
+def plot_field_slices(
+    fields: dict[str, np.ndarray],
+    filename: str | None = None,
+    axis: int = 2,
+    index: int | None = None,
+    cmap: str = "viridis",
+) -> None:
+    """Plot mid-plane slices of one or more 3-D fields.
+
+    This is deliberately lightweight post-processing: it is meant for quick
+    sanity checks of PDE solutions and Fourier fields before opening ParaView.
+    If matplotlib is unavailable the function logs and returns.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        _log.error("matplotlib is required for plotting. Install with: pip install matplotlib")
+        return
+
+    if not fields:
+        raise ValueError("fields must contain at least one scalar array.")
+
+    axis = int(axis)
+    if axis < 0 or axis > 2:
+        raise ValueError("axis must be 0, 1 or 2.")
+
+    arrays = {name: np.asarray(field) for name, field in fields.items()}
+    for name, arr in arrays.items():
+        if arr.ndim != 3:
+            raise ValueError(f"Field {name!r} must be 3-D, got shape {arr.shape}.")
+
+    first_shape = next(iter(arrays.values())).shape
+    slice_index = first_shape[axis] // 2 if index is None else int(index)
+    if slice_index < 0 or slice_index >= first_shape[axis]:
+        raise ValueError(
+            f"index {slice_index} is outside axis {axis} bounds for shape {first_shape}."
+        )
+
+    n_fields = len(arrays)
+    ncols = min(3, n_fields)
+    nrows = int(math.ceil(n_fields / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.0 * ncols, 3.6 * nrows))
+    axes_arr = np.atleast_1d(axes).ravel()
+
+    for ax, (name, arr) in zip(axes_arr, arrays.items()):
+        if axis == 0:
+            sl = arr[slice_index, :, :]
+        elif axis == 1:
+            sl = arr[:, slice_index, :]
+        else:
+            sl = arr[:, :, slice_index]
+        im = ax.imshow(np.asarray(sl).T, origin="lower", cmap=cmap, aspect="equal")
+        ax.set_title(name)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    for ax in axes_arr[n_fields:]:
+        ax.axis("off")
+
+    fig.tight_layout()
+    if filename:
+        fig.savefig(filename, bbox_inches="tight", dpi=150)
+        _log.info("Saved field slice plot to %s", filename)
+    else:
+        plt.show()
+    plt.close(fig)

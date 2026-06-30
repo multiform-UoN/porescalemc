@@ -1,124 +1,127 @@
-MATTEO ICARDI (with G. Boccardo, H. Hoel, N. Quadrio)
-November 2013 - March 2015
--------------------------------------------------------
-Multilevel Monte Carlo for flow simulations on random porous media geometries
-------------------------------------------------------
+# porescalemc
 
-PLEASE CITE doi:10.1016/j.advwatres.2016.01.004
+Pure-Python implementation of Multilevel Monte Carlo (MLMC) for uncertainty quantification on random pore-scale geometries.
 
-Code released under GPL license
+This is a modern reimplementation focused on a clean, testable Python core. It generates hierarchical sphere and oriented ellipsoid packings, computes cheap algebraic and spectral (FFT + Volume Penalisation) quantities of interest, runs MLMC (fixed and adaptive), estimates computational speedups versus standard Monte Carlo, and exports results as structured VTK files for ParaView visualization.
 
-------------------------------------------------------
-folder literature: relevant papers on mlmc, random geometry, packings and others
+The original 2013–2016 research code and paper are preserved for reference (see `awr.tex` and legacy directories). External PDE solvers (OpenFOAM, Gmsh/GetDP) are left for future work.
 
-folder code_dev: development version (new things go here)
-subfolder Dict: input files to run the code (dictionary files)
+## Key Features
 
-folder script: various scripts to run and manage the code at a higher level
+- **Geometry**: Deterministic, name-based generation of sphere/ellipsoid packings with Jodrey-Tory compaction. Supports hierarchical refinement (domain size, grain size, count, discretization).
+- **Cheap QoIs**:
+  - Algebraic packing statistics (porosity, specific surface area, nearest-neighbor distances, etc.).
+  - Analytical Fourier reconstruction of solid-fraction fields + upscaled permeability.
+  - Spectral VPM solvers (diffusion with Dirichlet/Neumann BCs, Brinkman-Stokes, advection-diffusion at finite Pe) using CG and Richardson iteration on the same Fourier grid.
+- **MLMC**: Full Giles-style estimator with paired sampling (same realization for coarse/fine), optimal allocation, adaptive convergence, bias extrapolation option, and level-aware factories.
+- **Speedup Analysis**: Tools to estimate and report MLMC computational savings versus plain Monte Carlo using observed work and classic rates (α, β, γ).
+- **Post-processing**: Export of structured fields (solid fraction, porosity, velocity, etc.) as VTK ImageData (`.vti`) for immediate use in ParaView — volume rendering, isosurfaces, slices — without surface meshing.
+- **Pure Python**: No external solvers or meshing required for the core functionality. Optional dependencies for plotting.
 
-folder code: main python code (only tested and stable things go here)
-subfolder Dict: input files to run the code (dictionary files)
+## Installation
 
-code files:
-*template             = OPENFOAM and GMSH predefined cases, all options about numerical schemes and other things are there
-run.py                = main file to run with python3 (customizable by the user)
-bsand.py              = module for virtual deposition process
-randomgeo.py          = module for random geometry generation
-single.py             = module for runnning single simulations or parametric studies
-mlmc.py               = module for running MC or MLMC estimation
-openfoam.py           = module for loading OpenFOAM
-gmshgetdp             = module for running GETDP
-packing.py            = module for statistical analysis of packings, used as a solver (no PDE though)
-general.py            = general include file for all the modules
-*Default.py           = default values for Dict files. If a *Dict.py file is present in the folder they are overwritten
-                        NB: the Default files are just symbolic links to the *Dict files in the code/Dict folder
-other files:
-compute_porosity.pvsm = ParaView state file to compute effective porosity of a certain sample (moved to OF template folder)
-qoi.sh                = bash script to extract a quantity of interest from the OpenFOAM log file
-store_case.sh         = bash script to backup all the log files and folders of a specified testcase
-clear_case.sh         = bash script to remove all simulation data from the folders
-monitorResiduals      = gnuplot script to plot residuals from OpenFOAM log file (moved to OF template folder)
+```bash
+pip install -e .
+# or for development with plotting
+pip install -e ".[plot]"
+```
 
-------------------------------------------------------------
+Requires Python ≥ 3.10, numpy, scipy.
 
-Usage overview:
-The code has be developed in a modular way.
-Almost each module can be imported and used autonomously however the full usage is meant to be through the run.py main file 
+## Quick Start
 
-Introduction:
-- Take a look at run/run.sh for running the code
-- Take a look at the dictionaries to see all the options available
-- Take a look at run.py to change the main routine and customize the analysis
+```python
+from porescalemc import run_mlmc
+from porescalemc.config import PackingConfig, MLMCConfig
 
-To run the code:
-Either use the script run.sh (editing it accordingly) or follow these steps:
-1 - create a work folder with the setup.sh script
-3 - Customize all the options in the dictionaries and the run.sh script 
-4 - Setup Blender, OpenFOAM or GMSH in the PATH and their custom internal properties (or add it in run.sh)
-5 - run the script run.sh (or run.py with "python -u" or "ipython", after you have set all the environmental variables, see the run.sh bash file for an example)
+pcfg = PackingConfig(mu=0.08, n_grains=25, periodic=True)
+mcfg = MLMCConfig(n_levels=3, tolerance=0.05, algorithm="fixed")
 
-Requisites:
-- OpenFOAM-2.3 or later (with previous versions you should replace the file searchableSphere.C to fix a bug)
-- for multiphase simulations (comp2phase) need OF 2.3, swak4Foam and some extra OF functionalities developed by me (Matteo)
-- For elliptic PDEs GMSH and GETDP recent versions and added in the PATH
-- For complex packings Blender > 2.68
-- python3 with all scientific modules (random, numpy, matplotlib, etc). It is suggested to use Anaconda from Continuum Analytics. Install the 3.x version 
-- For clusters and distibuted computing, an environment variable $HOSTFILE should point to a file with the list of hosts
+mean, err = run_mlmc(pcfg, mcfg)
+print(mean, err)
+```
 
-Suggested system setup:
-- add the following lines to your .profile or .bashrc file
-export MLMC_PORESCALE=~/porescalemc
-export PYTHONPATH=$PYTHONPATH:$MLMC_PORESCALE/code
-alias setup_mlmc_testcase=$MLMC_PORESCALE/script/setup.sh
-------------------------------------------------------------------------------------
+### Using Spectral Solvers
 
-TO-DO LIST IMPORTANT (FIXINGS, DEVELOPMENTS TO BE COMPLETED):
-- implement adaptive stopping and checking Aitken method once more
-- implement aitken or other extrapolation also for the levels to reduce bias
-- check gmsh solvers and modify accordingly also packing solver (recent changes in the definition of set_input and setup)
-- re-check all formula for QoI and function objects
-- add wallbcs based on openfoamDict entry also in other solvers (now only in steadyNS)
+```python
+from porescalemc.config import PackingConfig, SpectralConfig, spectral_hierarchy_level
+from porescalemc.geometry.placement import sample_packing_from_name
+from porescalemc.solvers.spectral import SpectralDiffusionSolver
+from porescalemc.mlmc.estimator import MLMCEstimator
 
-Future developments (big things):
-- add parametric studies to single.py
-- Implement the coupling with Fenics (Haakon)
-- Add other equations (in OF, GETDP and Fenics) and other post-processing QoIs
-- packing analysis study module: add better porosity estimation, implement surface area estimation, two-point correlation and other stuff
+def geo_factory(level, name, pcfg):
+    return sample_packing_from_name(level, name, pcfg)
 
-General to-do list (small things):
-- Rewrite the QoI processing by avoiding writing files and, if possible, avoid also writing simulations setups
-- Reorganize debug output, log files and input/output using logging module
-- look in the code for the keyword "TODO"
-- 2D for GMSH/GETDP is not implemented. 2D for OpenFOAM should be checked again
-- check the implementation of mlmc_hybrid to parallelize with supercomputers (mixed mpi and multiprocessing with rpyc)
-- manage more exceptions (code not converging, geometry not connected, NaN, etc....)
+def solver_factory(packing, level=0):
+    cfg = spectral_hierarchy_level(SpectralConfig(resolution=12, eta=1e-4), level)
+    return SpectralDiffusionSolver(spectral_config=cfg)
 
-randomgeo.py to-do list:
-- compute approximate porosity from pair-distance matrix
-- add preferential orientation for ellipsoids
-- add shrinking/growing factor to improve packing algorithm and to simulate low porosity media (only OpenFOAM)
-- finish and check Nathan's development on heterogeneities
+est = MLMCEstimator(
+    name="diffusion-uq",
+    packing_config=PackingConfig(n_grains=12),
+    mlmc_config=MLMCConfig(n_levels=3, m0=8),
+    geometry_factory=geo_factory,
+    solver_factory=solver_factory,
+)
+mean, err = est.run()
+```
 
-bsand.py to-do list:
-- add ellipsoids and random rotation (already done for randomgeo, just copy it)
-- add other primitives
-- perform sampling of grains on pre-defined model sets
-- add random roughness
-- separate container STL from grain STL to impose different BCs
+### VTK Export for ParaView
 
-mlmc.py to-do list:
-- extrapolate Q and the constant in the convergence rate from Q_l (Richardson extrapolation)
-- propose a robust way to estimate alpha,beta and gamma and use them in the stopping criterium and in the optimal number of samples for new levels (see CMLMC of Abdo)
-- propose an automatic way to deal with multi-index refinement instead of increasing/decreasing all parameters at the same time
+```python
+from porescalemc.geometry.fourier_field import save_structured_vti, porosity_field
+from porescalemc.config import FourierConfig
 
--------------------------------------------------------------------------
+fcfg = FourierConfig(resolution=24, smoothing="cell")
+phi_s = porosity_field(packing, fcfg)
 
-References:
-- Icardi et al. (2016 AdWR, 2015 ??)
-- Abdul-Lateef Haji-Ali et al., Continuation Multilevel Monte Carlo, Multi-index Monte Carlo
-- Hakon Hoel's note
-- Nathan Quadrio's master thesis (PoliTo and KAUST)
-- Luigi Del Plato's master thesis (PoliTo)
-- Eleonora Crevacore's master thesis (PoliTo)
-- Icardi et. al., PRE, 2014
+origin = (-0.5, -0.5, -0.5)  # centered box
+spacing = (1.0 / phi_s.shape[0],) * 3
 
+save_structured_vti(phi_s, origin, spacing, "solid_fraction.vti", "solid_fraction")
+# Open in ParaView for volume rendering or isosurfaces of the smoothed geometry.
+```
+
+### MLMC Speedup Estimation
+
+```python
+from porescalemc.mlmc.statistics import mlmc_speedup_report
+
+report = mlmc_speedup_report(est._samples, est._work, mcfg)
+print(f"Estimated speedup vs MC: {report['estimated_speedup']:.1f}x")
+print(report)
+```
+
+## Examples
+
+- `examples/spectral_solvers.py` — Hasimoto validation, diffusion/Stokes/advection-diffusion, level-aware MLMC, VTK export, speedup demo.
+- `examples/pure_python_mlmc.py` — Basic packing-stats MLMC.
+
+Run with:
+
+```bash
+PYTHONPATH=. python examples/spectral_solvers.py
+```
+
+## Testing
+
+```bash
+python -m pytest tests/ -q
+# or
+python -m unittest discover -v
+```
+
+## References
+
+- Original work: Icardi et al., "On the predictivity of pore-scale simulations: an Uncertainty Quantification approach", *Advances in Water Resources* (2016).
+- MLMC foundations: Giles (2008, 2015), Cliffe et al., Haji-Ali et al.
+
+See `porescalemc.tex` for detailed mathematical documentation.
+
+## License
+
+GPL (see LICENSE). Please cite the 2016 paper when using or building on this work.
+
+## Status
+
+Pure-Python core is complete and tested (geometry, Fourier fields, spectral VPM solvers, MLMC engine, post-processing, speedup analysis). Legacy external-solver paths and surface meshing remain for future development.

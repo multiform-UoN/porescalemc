@@ -47,7 +47,14 @@ import numpy as np
 from porescalemc.config import MLMCConfig, PackingConfig, hierarchy_level
 from porescalemc.geometry.grains import Packing
 from porescalemc.geometry.placement import sample_packing_from_name
-from porescalemc.mlmc.statistics import MLMCStats, check_convergence, compute_mlmc_stats, optimal_sample_counts
+from porescalemc.mlmc.statistics import (
+    MLMCStats,
+    check_convergence,
+    compute_mlmc_stats,
+    estimate_observed_rates,
+    mlmc_diagnostics_report,
+    optimal_sample_counts,
+)
 from porescalemc.solvers.packing import PackingStatsSolver
 from porescalemc.mlmc.workers import run_all_levels
 
@@ -266,6 +273,16 @@ class MLMCEstimator:
         """Most recently computed statistics, or None before ``run``."""
         return self._stats
 
+    def diagnostics(self) -> dict:
+        """Return observed finite-level MLMC diagnostics.
+
+        Includes per-level means, variances, sample counts, work, observed
+        rate estimates, and the current non-asymptotic optimal sample counts.
+        """
+        if self._stats is None:
+            raise RuntimeError("No statistics available. Run the estimator first.")
+        return mlmc_diagnostics_report(self._stats, self.mlmc_config)
+
     def save(self, path: str) -> None:
         """Save samples, work, stats, and configs to ``path`` (pickle)."""
         data = {
@@ -307,7 +324,7 @@ class MLMCEstimator:
     def plot_convergence(self, filename: str | None = None) -> None:
         """Plot MLMC convergence diagnostics.
 
-        Shows per-level mean and variance of the pair differences.
+        Shows per-level mean, variance, work and sample counts.
         Requires matplotlib (optional dependency).
 
         Parameters
@@ -329,26 +346,40 @@ class MLMCEstimator:
         levels = list(range(len(stats.means)))
         nvar = len(stats.means[0])
 
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+        ax_mean, ax_var, ax_work, ax_samples = axes.ravel()
 
         for v in range(nvar):
             means_v = [abs(m[v]) for m in stats.means]
             vars_v = [v_arr[v] for v_arr in stats.variances]
 
-            axes[0].semilogy(levels, means_v, "o-", label=f"QoI {v}")
-            axes[1].semilogy(levels, vars_v, "s--", label=f"QoI {v}")
+            ax_mean.semilogy(levels, means_v, "o-", label=f"QoI {v}")
+            ax_var.semilogy(levels, vars_v, "s--", label=f"QoI {v}")
 
-        axes[0].set_xlabel("Level ℓ")
-        axes[0].set_ylabel("|E[Q_ℓ − Q_{ℓ−1}]|")
-        axes[0].set_title("Mean of level differences")
-        axes[0].grid(True)
-        axes[0].legend()
+        rates = estimate_observed_rates(stats, refratio=self.mlmc_config.refratio)
+        ax_mean.set_xlabel("Level ell")
+        ax_mean.set_ylabel("|E[Q_l - Q_{l-1}]|")
+        ax_mean.set_title(f"Mean increments (alpha~{rates['alpha_hat']:.2g})")
+        ax_mean.grid(True)
+        ax_mean.legend()
 
-        axes[1].set_xlabel("Level ℓ")
-        axes[1].set_ylabel("Var[Q_ℓ − Q_{ℓ−1}]")
-        axes[1].set_title("Variance of level differences")
-        axes[1].grid(True)
-        axes[1].legend()
+        ax_var.set_xlabel("Level ell")
+        ax_var.set_ylabel("Var[Q_l - Q_{l-1}]")
+        ax_var.set_title(f"Variance (beta~{rates['beta_hat']:.2g})")
+        ax_var.grid(True)
+        ax_var.legend()
+
+        ax_work.semilogy(levels, stats.work, "d-", color="tab:green")
+        ax_work.set_xlabel("Level ell")
+        ax_work.set_ylabel("Average work per sample")
+        ax_work.set_title(f"Cost growth (gamma~{rates['gamma_hat']:.2g})")
+        ax_work.grid(True)
+
+        ax_samples.bar(levels, stats.n_samples, color="tab:purple", alpha=0.8)
+        ax_samples.set_xlabel("Level ell")
+        ax_samples.set_ylabel("Samples")
+        ax_samples.set_title("Samples per level")
+        ax_samples.grid(True, axis="y")
 
         fig.tight_layout()
         if filename:

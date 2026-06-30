@@ -10,10 +10,13 @@ Validation cases:
 """
 
 import unittest
+import os
+import tempfile
 
 import numpy as np
 
 from porescalemc.config import SpectralConfig
+from porescalemc.geometry.fourier_field import save_spectral_fields_to_vti
 from porescalemc.geometry.grains import Grain, Packing
 from porescalemc.solvers.spectral import (
     SpectralAdvectionDiffusionSolver,
@@ -82,6 +85,54 @@ class TestSpectralDiffusion(unittest.TestCase):
         result = solver.solve()
         self.assertEqual(result.shape, (3,))
         self.assertTrue((result > 0).all())
+
+    def test_solution_fields_and_diagnostics_are_available(self):
+        """Diffusion solver should cache fields and scalar diagnostics for debugging."""
+        cfg = SpectralConfig(resolution=8, eta=1e-4, max_iter=80, tol=1e-5, n_directions=1)
+        packing = _sphere_packing(radius=0.1)
+        solver = SpectralDiffusionSolver(spectral_config=cfg)
+        solver.setup(packing)
+        result = solver.solve()
+
+        fields = solver.solution_fields()
+        diagnostics = solver.diagnostics()
+
+        self.assertIn("solid_fraction", fields)
+        self.assertIn("porosity", fields)
+        self.assertIn("diffusion_corrector_x", fields)
+        self.assertEqual(fields["solid_fraction"].shape, fields["porosity"].shape)
+        self.assertAlmostEqual(
+            diagnostics["diffusivity_x"],
+            float(result[0]),
+            delta=1e-12,
+        )
+        self.assertGreaterEqual(diagnostics["porosity_mean"], 0.0)
+        self.assertLessEqual(diagnostics["porosity_mean"], 1.0)
+
+    def test_save_spectral_fields_to_vti_exports_combined_xml(self):
+        """Convenience VTI export should include geometry and PDE fields."""
+        cfg = SpectralConfig(resolution=6, eta=1e-4, max_iter=50, tol=1e-5, n_directions=1)
+        packing = _sphere_packing(radius=0.1)
+        solver = SpectralDiffusionSolver(spectral_config=cfg)
+        solver.setup(packing)
+        solver.solve()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = os.path.join(tmpdir, "debug")
+            save_spectral_fields_to_vti(
+                solver,
+                packing,
+                solver.fourier_config,
+                base_name=base,
+            )
+            with open(base + "_fields.vti", "r", encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn('<VTKFile type="ImageData"', text)
+            self.assertIn('Name="solid_fraction"', text)
+            self.assertIn('Name="porosity"', text)
+            self.assertIn('Name="diffusion_corrector_x"', text)
+            self.assertTrue(os.path.exists(base + "_solid_fraction.vti"))
+            self.assertTrue(os.path.exists(base + "_porosity.vti"))
 
 
 class TestSpectralStokes(unittest.TestCase):

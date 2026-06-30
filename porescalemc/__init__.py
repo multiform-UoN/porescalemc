@@ -5,10 +5,11 @@ Pure-Python core for generating hierarchical sphere/ellipsoid packings
 and running MLMC on cheap algebraic or Fourier-derived QoIs.
 
 Key modules:
-- config: PackingConfig, MLMCConfig, FourierConfig
-- geometry: sample_packing_from_name, Packing, Grain, Fourier field
-- solvers: PackingStatsSolver, SolverProtocol
-- mlmc: MLMCEstimator (with deterministic paired sampling)
+- config: PackingConfig, MLMCConfig, FourierConfig, SpectralConfig
+- geometry: sample_packing_from_name, Packing, Grain, Fourier field + VTK export
+- solvers: PackingStatsSolver, Spectral*Solvers, SolverProtocol
+- mlmc: MLMCEstimator + speedup estimation tools
+- Post-processing: structured VTK export for ParaView (fields + smoothed geometry)
 
 Quick start (packing statistics):
 
@@ -41,9 +42,22 @@ from porescalemc.config import (
     spectral_hierarchy_level,
 )
 from porescalemc.geometry.placement import sample_packing_from_name
+from porescalemc.geometry.fourier_field import (
+    save_structured_vti,
+    save_spectral_fields_to_vti,
+)
 from porescalemc.solvers.fourier import FourierSolver
 from porescalemc.solvers.packing import PackingStatsSolver
+from porescalemc.solvers.spectral import (
+    SpectralDiffusionSolver,
+    SpectralStokesSolver,
+    SpectralAdvectionDiffusionSolver,
+)
 from porescalemc.mlmc.estimator import MLMCEstimator
+from porescalemc.mlmc.statistics import (
+    estimate_mlmc_work,
+    mlmc_speedup_report,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

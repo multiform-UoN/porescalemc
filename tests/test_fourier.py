@@ -1,4 +1,6 @@
 import math
+import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -10,6 +12,7 @@ from porescalemc.geometry.fourier_field import (
     grain_fourier_transform,
     packing_fourier_transform,
     porosity_field,
+    save_structured_vti_fields,
     smoothing_kernel,
     structure_factor,
     upscaled_permeability,
@@ -102,6 +105,31 @@ class FourierTests(unittest.TestCase):
         lc = correlation_length(packing, cfg)
         self.assertTrue(math.isfinite(lc))
         self.assertGreater(lc, 0.0)
+
+    def test_save_structured_vti_fields_writes_xml_image_data(self):
+        """VTI export should be real XML ImageData, not legacy VTK text."""
+        fields = {
+            "solid_fraction": np.ones((2, 3, 4)),
+            "porosity": np.zeros((2, 3, 4)),
+        }
+        with tempfile.NamedTemporaryFile(suffix=".vti", delete=False) as tmp:
+            path = tmp.name
+        try:
+            save_structured_vti_fields(
+                fields,
+                origin=(0.0, 0.0, 0.0),
+                spacing=(0.5, 0.25, 0.125),
+                filename=path,
+                active_scalar="solid_fraction",
+            )
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn('<VTKFile type="ImageData"', text)
+            self.assertIn('WholeExtent="0 1 0 2 0 3"', text)
+            self.assertIn('Name="solid_fraction"', text)
+            self.assertIn('Name="porosity"', text)
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":
