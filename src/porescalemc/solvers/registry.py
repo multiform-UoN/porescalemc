@@ -68,7 +68,7 @@ SOLVER_REGISTRY: dict[str, SolverInfo] = {
         name="tet_diffusion",
         cls=TetDiffusionSolver,
         qoi_names=TET_DIFFUSION_QOI_NAMES,
-        description="Gmsh tetrahedral mesh-backed Bruggeman diffusivity estimate.",
+        description="Gmsh tetrahedral P1-FEM Dirichlet diffusion estimate.",
         optional_dependency="gmsh",
     ),
 }

@@ -282,11 +282,14 @@ class GmshPackingMesher:
             slave_tags  = _physical_group_tags(2, slave_name)
             master_tags = _physical_group_tags(2, master_name)
             if slave_tags and master_tags:
-                # Affine matrix: 4×4 row-major, last row = [0,0,0,1]
+                # Gmsh expects the affine map from master to slave.  The
+                # pairing helper uses +tvec to identify the matching master
+                # face, so the actual periodic transform has translation
+                # -tvec.
                 affine = [
-                    1.0, 0.0, 0.0, tvec[0],
-                    0.0, 1.0, 0.0, tvec[1],
-                    0.0, 0.0, 1.0, tvec[2],
+                    1.0, 0.0, 0.0, -tvec[0],
+                    0.0, 1.0, 0.0, -tvec[1],
+                    0.0, 0.0, 1.0, -tvec[2],
                     0.0, 0.0, 0.0, 1.0,
                 ]
                 pairs = _matching_periodic_surface_pairs(slave_tags, master_tags, tvec)

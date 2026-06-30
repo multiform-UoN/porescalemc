@@ -65,6 +65,7 @@ class SolverTests(unittest.TestCase):
         self.assertIn("tet_diffusion", names)
         self.assertIn("porosity", available_qois("packing"))
         self.assertIn("diffusivity_x", available_qois("voxel_diffusion"))
+        self.assertIn("diffusivity_x", available_qois("tet_diffusion"))
         self.assertIs(solver_class("voxel_diffusion"), VoxelDiffusionSolver)
 
     def test_voxel_diffusion_empty_domain_is_free_diffusion(self):

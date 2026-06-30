@@ -105,7 +105,7 @@ Built-in solver keys currently include:
 - `fourier`: Fourier-field porosity/permeability closures.
 - `spectral_diffusion`, `spectral_stokes`, `spectral_advection_diffusion`.
 - `voxel_diffusion`: periodic voxel finite-volume diffusion cell solve.
-- `tet_diffusion`: optional Gmsh tetrahedral mesh-backed diffusivity estimate.
+- `tet_diffusion`: optional Gmsh tetrahedral P1-FEM diffusion estimate.
 
 ## VTK Export
 

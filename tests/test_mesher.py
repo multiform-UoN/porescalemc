@@ -226,6 +226,41 @@ class TestGmshPackingMesher(unittest.TestCase):
         self.assertGreater(mean[0], 0.0)
         self.assertLess(mean[0], 1.0)
 
+    def test_tet_diffusion_empty_domain_recovers_free_diffusion(self):
+        from porescalemc.solvers.tet import TetDiffusionSolver
+        import numpy as np
+
+        packing = Packing(box=(1.0, 1.0, 1.0), grains=[])
+        solver = TetDiffusionSolver(mesh_size=0.35, periodic=False, verbosity=0)
+        try:
+            solver.setup(packing)
+            qoi = solver.solve()
+            self.assertEqual(qoi.shape, (5,))
+            np.testing.assert_allclose(qoi[:3], np.ones(3), rtol=0.08, atol=0.08)
+            self.assertAlmostEqual(qoi[3], 1.0, places=6)
+            self.assertGreater(qoi[4], 0.0)
+        finally:
+            solver.close()
+
+    def test_tet_diffusion_sphere_returns_finite_porosity_and_diffusivity(self):
+        from porescalemc.solvers.tet import TetDiffusionSolver
+        import numpy as np
+
+        packing = self._single_sphere_packing(radius=0.18)
+        solver = TetDiffusionSolver(mesh_size=0.22, periodic=False, verbosity=0)
+        try:
+            solver.setup(packing)
+            qoi = solver.solve()
+            self.assertEqual(qoi.shape, (5,))
+            self.assertTrue(np.all(np.isfinite(qoi)))
+            self.assertGreater(np.min(qoi[:3]), 0.0)
+            self.assertLess(np.max(qoi[:3]), 1.1)
+            self.assertGreater(qoi[3], 0.0)
+            self.assertLess(qoi[3], 1.0)
+            self.assertGreater(qoi[4], 0.0)
+        finally:
+            solver.close()
+
 
 if __name__ == "__main__":
     unittest.main()
