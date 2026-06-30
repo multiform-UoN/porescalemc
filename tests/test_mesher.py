@@ -20,7 +20,7 @@ class TestGmshPackingMesher(unittest.TestCase):
     def _single_sphere_packing(self, radius: float = 0.2) -> Packing:
         return Packing(
             box=(1.0, 1.0, 1.0),
-            grains=[Grain(centre=(0.5, 0.5, 0.5), radii=(radius, radius, radius))],
+            grains=[Grain.sphere(center=[0.5, 0.5, 0.5], radius=radius)],
         )
 
     def test_import_succeeds(self):
@@ -61,9 +61,12 @@ class TestGmshPackingMesher(unittest.TestCase):
     def test_ellipsoid_grain(self):
         from porescalemc.geometry.mesher import GmshPackingMesher
         import tempfile, os
+        import numpy as np
+        # Axis-aligned ellipsoid: diagonal M with semi-axes 0.3, 0.2, 0.15
+        M = np.diag([0.3, 0.2, 0.15])
         packing = Packing(
             box=(1.0, 1.0, 1.0),
-            grains=[Grain(centre=(0.5, 0.5, 0.5), radii=(0.3, 0.2, 0.15))],
+            grains=[Grain.ellipsoid(center=[0.5, 0.5, 0.5], M=M)],
         )
         mesher = GmshPackingMesher(mesh_size=0.18, periodic=False, verbosity=0)
         mesher.build(packing)
@@ -87,7 +90,7 @@ class TestGmshPackingMesher(unittest.TestCase):
 
     def test_point_in_grain_helper(self):
         from porescalemc.geometry.mesher import _point_in_any_grain
-        grains = [Grain(centre=(0.5, 0.5, 0.5), radii=(0.2, 0.2, 0.2))]
+        grains = [Grain.sphere(center=[0.5, 0.5, 0.5], radius=0.2)]
         self.assertTrue(_point_in_any_grain(0.5, 0.5, 0.5, grains))
         self.assertFalse(_point_in_any_grain(0.0, 0.0, 0.0, grains))
 

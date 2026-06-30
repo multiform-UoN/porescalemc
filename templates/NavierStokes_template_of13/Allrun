@@ -1,0 +1,56 @@
+#!/bin/bash
+cd ${0%/*} || exit 1    # run from this directory
+
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+# Get application name
+application=`getApplication`
+
+blockMesh &> log.pre
+decomposePar &>> log.pre
+
+nproc=$(echo processor* | wc -w)
+
+if [ $nproc != "1" ]
+then
+  prefix="mpirun -np $nproc"
+  suffix="-parallel"
+else
+  prefix=""
+  suffix=""
+fi
+
+$prefix snappyHexMesh $suffix -overwrite &>> log.pre
+cp system/createPatchDict3D system/createPatchDict
+$prefix createPatch $suffix -overwrite &>> log.pre
+$prefix topoSet $suffix  &>> log.pre
+$prefix subsetMesh $suffix -overwrite -patch minX domain  &>> log.pre
+
+# Here starts the magic to fix issues with STL files...GianMeshing...thanks to Gianluca
+$prefix checkMesh $suffix -constant &> log.checkMesh
+# This looks at checkMesh log, identifies non connected regions, creates a cellSet for them
+setSetSetup.py log.checkMesh &> .setSet
+# Sets the Sets. Ambiguity for the win
+$prefix setSet $suffix -constant -batch .setSet -noVTK &>> log.pre
+$prefix subsetMesh $suffix saved -overwrite &>> log.pre
+ if [ -e "processor0" ]; then $prefix redistributePar $suffix -overwrite &>> log.pre; fi
+$prefix renumberMesh $suffix -overwrite &>> log.pre
+
+cp -r 0_3d 0
+if [ $nproc != "1" ]
+then
+	for i in proc*; do cp -r 0 pressure contactangle time $i/; done
+fi
+
+if [ $1 != "None" ]
+then
+  $prefix mapFields ../$1 $suffix -sourceTime latestTime &>> log.pre
+fi
+
+[ -e ../dynamicCode ] && cp -r ../dynamicCode .
+$prefix $application $suffix &>> log
+[ -e ../dynamicCode ] || cp -r dynamicCode ../
+touch paraview.foam
+
+
+# ----------------------------------------------------------------- end-of-file

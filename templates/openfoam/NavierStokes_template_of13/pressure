@@ -1,0 +1,7 @@
+inletp 1e7;
+outletp 0;
+
+// For OF13, variables provided by porescalemc or environment
+// lateralbcsec etc set by porescalemc
+
+

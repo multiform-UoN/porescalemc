@@ -12,7 +12,7 @@ Usage example
     from porescalemc.geometry.mesher import GmshPackingMesher
     from porescalemc.geometry.grains import Packing, Grain
 
-    packing = Packing(box=(1.0, 1.0, 1.0), grains=[Grain(centre=(0.5, 0.5, 0.5), radii=(0.2, 0.2, 0.2))])
+    packing = Packing(box=(1.0, 1.0, 1.0), grains=[Grain.sphere(center=[0.5, 0.5, 0.5], radius=0.2)])
     mesher = GmshPackingMesher(mesh_size=0.05, periodic=True)
     mesher.build(packing)
     mesher.write("packing.msh")
@@ -102,7 +102,7 @@ class GmshPackingMesher:
         # --- Grains (spheres / axis-aligned ellipsoids) ---
         grain_tags: list[int] = []
         for grain in packing.grains:
-            cx, cy, cz = grain.centre
+            cx, cy, cz = grain.center
             rx, ry, rz = grain.radii
             if rx == ry == rz:
                 tag = gmsh.model.occ.addSphere(cx, cy, cz, rx)
@@ -255,7 +255,7 @@ def _point_in_any_grain(
 ) -> bool:
     """Return True if (cx, cy, cz) is inside any grain ellipsoid."""
     for g in grains:
-        gx, gy, gz = g.centre
+        gx, gy, gz = g.center
         rx, ry, rz = g.radii
         val = (
             ((cx - gx) / rx) ** 2

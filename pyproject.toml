@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "porescalemc"
@@ -13,9 +13,11 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 test = ["pytest>=7", "pytest-cov"]
 plot = ["matplotlib>=3.7"]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["porescalemc*"]
+[tool.setuptools]
+packages = ["porescalemc", "porescalemc.geometry", "porescalemc.mlmc", "porescalemc.solvers"]
+
+[tool.setuptools.package-dir]
+"porescalemc" = "src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
