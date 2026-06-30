@@ -88,9 +88,20 @@ def _field_diagnostics(phi_s: np.ndarray, phi_f: np.ndarray) -> dict[str, float]
 def _add_directional_diagnostics(
     diagnostics: dict[str, float], prefix: str, values: np.ndarray
 ) -> None:
-    """Helper to populate Cartesian directional values into diagnostics."""
-    for idx, val in enumerate(values):
-        diagnostics[f"{prefix}_{_AXIS_NAMES[idx]}"] = float(val)
+    """Populate Cartesian directional or tensor values into diagnostics.
+
+    If *values* has 9 entries it is treated as a flattened 3×3 tensor and
+    keys are named ``{prefix}_ij`` (e.g. ``diffusivity_xx``).  Otherwise,
+    each entry maps to ``{prefix}_{axis}`` (e.g. ``diffusivity_x``).
+    """
+    if len(values) == 9:
+        for i in range(3):
+            for j in range(3):
+                key = f"{prefix}_{_AXIS_NAMES[i]}{_AXIS_NAMES[j]}"
+                diagnostics[key] = float(values[i * 3 + j])
+    else:
+        for idx, val in enumerate(values):
+            diagnostics[f"{prefix}_{_AXIS_NAMES[idx]}"] = float(val)
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +160,31 @@ def _divergence_k(vx, vy, vz, kx, ky, kz) -> np.ndarray:
         tpi * ky * np.fft.fftn(vy) +
         tpi * kz * np.fft.fftn(vz)
     ))
+
+
+def _variable_diffusion_op(
+    c_flat: np.ndarray,
+    D_field: np.ndarray,
+    kx: np.ndarray, ky: np.ndarray, kz: np.ndarray,
+    nx: int, ny: int, nz: int,
+) -> np.ndarray:
+    """Pseudospectral operator -∇·(D ∇c) applied to flat c.
+
+    Gradient of c is computed in Fourier space, multiplied by D in real
+    space, then divergence is taken in Fourier space.  Uses 8 FFTs total.
+    """
+    c3d = c_flat.reshape(nx, ny, nz)
+    c_hat = np.fft.fftn(c3d)
+    tpik = 2.0j * np.pi
+    gx = np.real(np.fft.ifftn(tpik * kx * c_hat))
+    gy = np.real(np.fft.ifftn(tpik * ky * c_hat))
+    gz = np.real(np.fft.ifftn(tpik * kz * c_hat))
+    div = np.real(np.fft.ifftn(
+        tpik * kx * np.fft.fftn(D_field * gx)
+        + tpik * ky * np.fft.fftn(D_field * gy)
+        + tpik * kz * np.fft.fftn(D_field * gz)
+    ))
+    return (-div).ravel()
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +303,9 @@ class SpectralDiffusionSolver(SolverProtocol):
         phi_f_mean = float(phi_f.mean())
 
         coords = [(xi, kx, Lx), (yi, ky, Ly), (zi, kz, Lz)]
-        D_eff = np.zeros(self.cfg.n_directions)
+        D_eff_diag = np.zeros(self.cfg.n_directions)
+        # Store (corrector, ki, Li) for each solved direction
+        correctors: list[tuple[np.ndarray, np.ndarray, float]] = []
         fields: dict[str, np.ndarray] = {
             "solid_fraction": phi_s.copy(),
             "porosity": phi_f.copy(),
@@ -275,22 +313,46 @@ class SpectralDiffusionSolver(SolverProtocol):
 
         for i, (coord, ki, Li) in enumerate(coords[: self.cfg.n_directions]):
             if self.cfg.bc_solid == "neumann":
-                D_eff[i], corrector = self._solve_neumann(
+                D_eff_diag[i], corrector = self._solve_neumann(
                     phi_s, phi_f, phi_f_mean, coord, ki, Li,
                     kx, ky, kz, k2, nx, ny, nz,
                 )
             else:
-                D_eff[i], corrector = self._solve_dirichlet(
+                D_eff_diag[i], corrector = self._solve_dirichlet(
                     phi_s, phi_f, phi_f_mean, coord, ki, Li, k2, nx, ny, nz,
                 )
+            correctors.append((corrector, ki, Li))
             fields[f"diffusion_corrector_{_AXIS_NAMES[i]}"] = corrector.copy()
 
-        self._result = D_eff
+        # For three directions build the full 3×3 tensor via cross-derivatives.
+        # D_ij = D_mean*δ_ij + L_j * mean(D_field * ∂c̃_j/∂x_i)
+        if self.cfg.n_directions == 3:
+            if self.cfg.bc_solid == "neumann":
+                D_field = phi_f + self.cfg.eta * phi_s
+            else:
+                D_field = phi_f
+            D_mean = float(D_field.mean())
+            k_comps = [kx, ky, kz]
+            D_tensor = np.zeros((3, 3))
+            for j, (c3d_j, _ki_j, Lj) in enumerate(correctors):
+                c3d_hat = np.fft.fftn(c3d_j)
+                for i, ki_i in enumerate(k_comps):
+                    dc_ji = np.real(np.fft.ifftn(2.0j * np.pi * ki_i * c3d_hat))
+                    val = (D_mean if i == j else 0.0) + Lj * float(np.mean(D_field * dc_ji))
+                    D_tensor[i, j] = val
+            # Only the diagonal is guaranteed non-negative; don't clamp off-diagonal
+            for k in range(3):
+                D_tensor[k, k] = max(D_tensor[k, k], 0.0)
+            result = D_tensor.ravel()
+        else:
+            result = np.maximum(D_eff_diag, 0.0)
+
+        self._result = result
         self._fields = fields
         diagnostics = _field_diagnostics(phi_s, phi_f)
-        _add_directional_diagnostics(diagnostics, "diffusivity", D_eff)
+        _add_directional_diagnostics(diagnostics, "diffusivity", result)
         self._diagnostics = diagnostics
-        return D_eff
+        return result
 
     def solution_fields(self) -> dict[str, np.ndarray]:
         """Return cached fields from the last solve for plotting/VTI export."""
@@ -335,33 +397,37 @@ class SpectralDiffusionSolver(SolverProtocol):
         self, phi_s, phi_f, phi_f_mean,
         coord, ki, Li, kx, ky, kz, k2, nx, ny, nz,
     ) -> tuple[float, np.ndarray]:
-        eps_reg = 1e-8
-        phi_f_avg = max(phi_f_mean, 1e-6)
+        eta = self.cfg.eta
+        # D(x) = phi_f + eta*phi_s — always ≥ eta > 0, avoids zero diffusivity in solid
+        D_field = phi_f + eta * phi_s
+        D_mean = float(D_field.mean())
 
         def A_op(c_flat: np.ndarray) -> np.ndarray:
-            c3d = c_flat.reshape(nx, ny, nz)
-            gx, gy, gz = _gradient_k(c3d, kx, ky, kz)
-            Ac = -_divergence_k(
-                phi_f * gx, phi_f * gy, phi_f * gz, kx, ky, kz
-            )
-            return (Ac + eps_reg * c3d).ravel()
+            return _variable_diffusion_op(c_flat, D_field, kx, ky, kz, nx, ny, nz)
 
         def M_op(r_flat: np.ndarray) -> np.ndarray:
             r3d = r_flat.reshape(nx, ny, nz)
-            denom = phi_f_avg * 4.0 * np.pi ** 2 * k2 + eps_reg
-            result = np.real(np.fft.ifftn(np.fft.fftn(r3d) / denom))
+            # Constant-coefficient preconditioner: -D_mean ∇², handled at k=0 via mean subtraction
+            denom = D_mean * 4.0 * np.pi ** 2 * k2
+            denom_safe = np.where(denom > 0, denom, 1.0)
+            result = np.real(np.fft.ifftn(np.fft.fftn(r3d) / denom_safe))
             result -= result.mean()
             return result.ravel()
 
-        # RHS: -1/Li * ∂phi_s/∂xi (spectral gradient of phi_s)
+        # RHS: (1/Li) * ∂D_field/∂xi — note sign reversal from chain rule
+        # ∂D_field/∂xi = (eta-1)*∂phi_s/∂xi  =>  RHS = (eta-1)/Li * ∂phi_s/∂xi
         dphi_s = np.real(np.fft.ifftn(2.0j * np.pi * ki * np.fft.fftn(phi_s)))
-        b = (-dphi_s / Li).ravel()
+        b = ((eta - 1.0) / Li * dphi_s).ravel()
+        # b is automatically mean-zero since spectral gradient has zero DC component
+
         c_tilde = _cg_solve(
             A_op, b, max_iter=self.cfg.max_iter, tol=self.cfg.tol, M_op=M_op,
         )
+        # Remove null-space component (constant): operator A_N annihilates constants
+        c_tilde -= c_tilde.mean()
         c3d = c_tilde.reshape(nx, ny, nz)
         dc = np.real(np.fft.ifftn(2.0j * np.pi * ki * np.fft.fftn(c3d)))
-        D_eff = max(phi_f_mean + Li * float(np.mean(phi_f * dc)), 0.0)
+        D_eff = max(D_mean + Li * float(np.mean(D_field * dc)), 0.0)
         return D_eff, c3d
 
     def close(self) -> None:
@@ -482,7 +548,19 @@ class SpectralStokesSolver(SolverProtocol):
             velocity_fields.append(u.copy())
 
         self._velocity_fields = velocity_fields
-        self._result = K_eff
+
+        # Build full 3×3 permeability tensor when n_directions == 3.
+        # K_tensor[i, j] = mean(u_i) when driven by body force e_j.
+        if self.cfg.n_directions == 3:
+            K_tensor = np.zeros((3, 3))
+            for j, vel in enumerate(velocity_fields):
+                for i in range(3):
+                    K_tensor[i, j] = float(vel[i].mean())
+            result = K_tensor.ravel()
+        else:
+            result = K_eff
+
+        self._result = result
         fields: dict[str, np.ndarray] = {
             "solid_fraction": phi_s.copy(),
             "porosity": phi_f.copy(),
@@ -496,9 +574,9 @@ class SpectralStokesSolver(SolverProtocol):
                     fields[f"u{component_axis}"] = velocity[component].copy()
         self._fields = fields
         diagnostics = _field_diagnostics(phi_s, phi_f)
-        _add_directional_diagnostics(diagnostics, "permeability", K_eff)
+        _add_directional_diagnostics(diagnostics, "permeability", result)
         self._diagnostics = diagnostics
-        return K_eff
+        return result
 
     def solution_fields(self) -> dict[str, np.ndarray]:
         """Return cached fields from the last solve for plotting/VTI export."""

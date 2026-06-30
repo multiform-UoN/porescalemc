@@ -77,14 +77,15 @@ class TestSpectralDiffusion(unittest.TestCase):
         self.assertGreater(float(result[0]), 0.0)
 
     def test_n_directions_3_returns_tensor(self):
-        """n_directions=3 returns shape (3,) with all positive entries."""
+        """n_directions=3 returns the full 3×3 tensor as shape (9,); diagonal must be positive."""
         cfg = SpectralConfig(resolution=10, eta=1e-4, max_iter=100, tol=1e-5, n_directions=3)
         packing = _sphere_packing(radius=0.1)
         solver = SpectralDiffusionSolver(spectral_config=cfg)
         solver.setup(packing)
         result = solver.solve()
-        self.assertEqual(result.shape, (3,))
-        self.assertTrue((result > 0).all())
+        self.assertEqual(result.shape, (9,))
+        diag = result[[0, 4, 8]]  # D_xx, D_yy, D_zz
+        self.assertTrue((diag > 0).all())
 
     def test_solution_fields_and_diagnostics_are_available(self):
         """Diffusion solver should cache fields and scalar diagnostics for debugging."""
@@ -170,14 +171,15 @@ class TestSpectralStokes(unittest.TestCase):
         self.assertTrue(np.isfinite(K_eff))
 
     def test_n_directions_3_returns_tensor(self):
-        """n_directions=3 returns shape (3,) with all positive entries."""
+        """n_directions=3 returns the full 3×3 tensor as shape (9,); diagonal must be positive."""
         cfg = SpectralConfig(resolution=10, eta=1e-4, max_iter=200, tol=1e-5, n_directions=3)
         packing = _sphere_packing(radius=0.1)
         solver = SpectralStokesSolver(spectral_config=cfg)
         solver.setup(packing)
         result = solver.solve()
-        self.assertEqual(result.shape, (3,))
-        self.assertTrue((result > 0).all())
+        self.assertEqual(result.shape, (9,))
+        diag = result[[0, 4, 8]]  # K_xx, K_yy, K_zz
+        self.assertTrue((diag > 0).all())
 
 
 class TestSpectralAdvDiff(unittest.TestCase):
