@@ -96,7 +96,7 @@ class VoxelDiffusionSolver(SolverProtocol):
             chi = _solve_cg(operator, rhs.ravel(), self.max_iter, self.tol)
             chi = chi.reshape(diffusivity.shape)
             chi -= chi.mean()
-            values[axis] = max(_effective_diffusivity(diffusivity, chi, spacing, axis), 0.0)
+            values[axis] = max(_effective_diffusivity(face, chi, spacing, axis), 0.0)
             fields[f"voxel_corrector_{'xyz'[axis]}"] = chi.copy()
 
         self._result = values
@@ -186,12 +186,13 @@ def _solve_cg(operator: LinearOperator, rhs: np.ndarray, max_iter: int, tol: flo
 
 
 def _effective_diffusivity(
-    diffusivity: np.ndarray,
+    face: tuple[np.ndarray, np.ndarray, np.ndarray],
     corrector: np.ndarray,
     spacing: tuple[float, float, float],
     axis: int,
 ) -> float:
-    grad = (np.roll(corrector, -1, axis=axis) - np.roll(corrector, 1, axis=axis)) / (
-        2.0 * spacing[axis]
-    )
-    return float(np.mean(diffusivity * (1.0 + grad)))
+    """Return mean periodic face flux in the imposed unit-gradient direction."""
+    h = spacing[axis]
+    dplus = face[axis]
+    forward_grad = (np.roll(corrector, -1, axis=axis) - corrector) / h
+    return float(np.mean(dplus * (1.0 + forward_grad)))

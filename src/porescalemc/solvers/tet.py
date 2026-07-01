@@ -1,7 +1,7 @@
 """Tetrahedral finite-element diffusion solver adapter.
 
-Two solve modes, both based on the same homogenisation cell problem
--------------------------------------------------------------------
+Two solve modes
+---------------
 periodic=True (default)
     Proper periodic cell problem.  Periodic node pairs are identified by
     coordinate matching on the Gmsh-periodic mesh; DOF condensation via a
@@ -13,12 +13,11 @@ periodic=True (default)
     by subtracting its mean.
 
 periodic=False
-    Neumann (no-flux) cell problem on the non-periodic mesh.  The same
-    stiffness K and load f^(j) are used without condensation; since K has
-    a 1-D null space (constants), the gauge is fixed identically by
-    mean-subtraction after the solve.
+    A non-periodic Dirichlet conduction estimate.  For each coordinate
+    direction, c=0 and c=1 are imposed on opposite box faces and the
+    remaining boundaries, including grain walls, are natural no-flux.
 
-Both modes use the homogenisation formula
+The periodic mode uses the homogenisation formula
 
     D_ij = φ_f δ_ij + (1/V) χ^(j) · f^(i),
 
@@ -68,10 +67,9 @@ class TetDiffusionSolver(SolverProtocol):
 
     Returns ``[D_xx, D_yy, D_zz, mesh_porosity, num_elements]``.
 
-    With ``periodic=True`` (default) this solves the full periodic cell
-    problem via DOF condensation; with ``periodic=False`` it uses pure
-    Neumann BCs (no-flux on all boundaries) — both modes fix the gauge
-    by mean-subtraction so the system is always well-posed.
+    With ``periodic=True`` (default) this solves the periodic cell problem
+    via DOF condensation.  With ``periodic=False`` it computes a simpler
+    Dirichlet conduction estimate between opposite faces.
     """
 
     qoi_names = TET_DIFFUSION_QOI_NAMES
@@ -118,7 +116,14 @@ class TetDiffusionSolver(SolverProtocol):
         porosity = float(self.mesher.get_mesh_porosity())
         n_elements = float(self.mesher.get_num_elements())
 
-        D_tensor = _solve_cell_problem(self.packing.box, use_periodic=self.periodic)
+        if self.periodic:
+            D_tensor = _solve_periodic_cell_problem(self.packing.box)
+        else:
+            K, _, node_coords, _ = _assemble_fluid_p1_system()
+            D_tensor = np.diag([
+                _solve_dirichlet_effective_diffusivity(K, node_coords, self.packing.box, axis)
+                for axis in range(3)
+            ])
         diffusivities = [float(D_tensor[i, i]) for i in range(3)]
 
         self._result = np.array([*diffusivities, porosity, n_elements], dtype=float)
@@ -129,7 +134,7 @@ class TetDiffusionSolver(SolverProtocol):
             "mesh_porosity": porosity,
             "num_elements": n_elements,
             "mesh_size": self.mesh_size,
-            "mode": "periodic" if self.periodic else "neumann",
+            "mode": "periodic" if self.periodic else "dirichlet",
         }
         for i in range(3):
             for j in range(3):
@@ -146,18 +151,15 @@ class TetDiffusionSolver(SolverProtocol):
 
 
 # ---------------------------------------------------------------------------
-# Shared cell-problem solver (periodic or Neumann)
+# Periodic cell-problem solver
 # ---------------------------------------------------------------------------
 
-def _solve_cell_problem(
-    box: tuple[float, float, float],
-    use_periodic: bool = True,
-) -> np.ndarray:
+def _solve_periodic_cell_problem(box: tuple[float, float, float]) -> np.ndarray:
     """Assemble and solve the homogenisation cell problem; return 3×3 D_eff.
 
-    Both modes:
+    Steps:
     1. Assemble K (P1 stiffness on fluid tets) and F (load, shape n×3).
-    2. Optionally condense periodic DOFs via restriction matrix R.
+    2. Condense periodic DOFs via restriction matrix R.
     3. Regularise the null space with eps·I so the system is non-singular.
     4. Solve K_sys χ = −F_sys for each axis; gauge-fix with mean-subtraction.
     5. Compute D_ij = φ_f·δ_ij + (1/V) χ^(j)·F^(i).
@@ -168,22 +170,14 @@ def _solve_cell_problem(
     phi_f = fluid_vol / V
     n_full = len(node_coords)
 
-    if use_periodic:
-        pairs = _find_periodic_node_pairs(node_coords, box)
-        dof_condensed, n_reduced = _condense_dofs(n_full, pairs)
-        R = coo_matrix(
-            (np.ones(n_full, dtype=float),
-             (np.arange(n_full), dof_condensed)),
-            shape=(n_full, n_reduced),
-        ).tocsr()
-        K_sys = (R.T @ K @ R).tocsr()
-        F_sys = (R.T @ F)          # (n_reduced, 3)
-        mode = "periodic"
-    else:
-        R = None
-        K_sys = K.tocsr()
-        F_sys = F                  # (n_full, 3)
-        mode = "neumann"
+    pairs = _find_periodic_node_pairs(node_coords, box)
+    dof_condensed, n_reduced = _condense_dofs(n_full, pairs)
+    R = coo_matrix(
+        (np.ones(n_full, dtype=float), (np.arange(n_full), dof_condensed)),
+        shape=(n_full, n_reduced),
+    ).tocsr()
+    K_sys = (R.T @ K @ R).tocsr()
+    F_sys = (R.T @ F)          # (n_reduced, 3)
 
     # Null-space regularisation: K has exactly one zero eigenvalue (constants).
     # eps·I shifts it just enough to make spsolve converge; mean-subtraction
@@ -196,7 +190,7 @@ def _solve_cell_problem(
     for j in range(3):
         chi_r = spsolve(K_reg, -F_sys[:, j])
         chi_r -= chi_r.mean()                          # fix gauge
-        chi_full[:, j] = (R @ chi_r) if R is not None else chi_r
+        chi_full[:, j] = R @ chi_r
 
     D_eff = np.zeros((3, 3), dtype=float)
     for i in range(3):
@@ -204,10 +198,42 @@ def _solve_cell_problem(
             D_eff[i, j] = phi_f * float(i == j) + float(chi_full[:, j] @ F[:, i]) / V
 
     _log.debug(
-        "FEM cell problem (%s): phi_f=%.3f, D_eff diag=[%.4f, %.4f, %.4f]",
-        mode, phi_f, D_eff[0, 0], D_eff[1, 1], D_eff[2, 2],
+        "FEM periodic cell problem: phi_f=%.3f, D_eff diag=[%.4f, %.4f, %.4f]",
+        phi_f, D_eff[0, 0], D_eff[1, 1], D_eff[2, 2],
     )
     return D_eff
+
+
+def _solve_dirichlet_effective_diffusivity(
+    stiffness,
+    coords: np.ndarray,
+    box: tuple[float, float, float],
+    axis: int,
+) -> float:
+    """Solve one non-periodic unit-gradient Dirichlet conduction problem."""
+    lengths = np.asarray(box, dtype=float)
+    length = float(lengths[axis])
+    area = float(np.prod(np.delete(lengths, axis)))
+    x = coords[:, axis]
+    tol = max(1e-9, 1e-7 * length)
+    lo = x <= tol
+    hi = x >= length - tol
+    fixed = lo | hi
+    if not np.any(lo) or not np.any(hi):
+        raise RuntimeError(f"Missing Dirichlet nodes on axis {axis}.")
+
+    values = np.zeros(coords.shape[0], dtype=float)
+    values[hi] = 1.0
+    free = ~fixed
+    if np.any(free):
+        Kff = stiffness[free][:, free]
+        Kfd = stiffness[free][:, fixed]
+        rhs = -Kfd @ values[fixed]
+        values[free] = spsolve(Kff, rhs)
+
+    energy = float(values @ (stiffness @ values))
+    diffusivity = energy * length / area
+    return max(diffusivity, 0.0)
 
 
 # ---------------------------------------------------------------------------

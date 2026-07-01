@@ -239,6 +239,22 @@ class TestGmshPackingMesher(unittest.TestCase):
             np.testing.assert_allclose(qoi[:3], np.ones(3), rtol=0.08, atol=0.08)
             self.assertAlmostEqual(qoi[3], 1.0, places=6)
             self.assertGreater(qoi[4], 0.0)
+            self.assertEqual(solver.diagnostics()["mode"], "dirichlet")
+        finally:
+            solver.close()
+
+    def test_tet_diffusion_periodic_empty_domain_recovers_free_diffusion(self):
+        from porescalemc.solvers.tet import TetDiffusionSolver
+        import numpy as np
+
+        packing = Packing(box=(1.0, 1.0, 1.0), grains=[])
+        solver = TetDiffusionSolver(mesh_size=0.35, periodic=True, verbosity=0)
+        try:
+            solver.setup(packing)
+            qoi = solver.solve()
+            self.assertEqual(qoi.shape, (5,))
+            np.testing.assert_allclose(qoi[:3], np.ones(3), rtol=0.08, atol=0.08)
+            self.assertEqual(solver.diagnostics()["mode"], "periodic")
         finally:
             solver.close()
 
@@ -258,6 +274,26 @@ class TestGmshPackingMesher(unittest.TestCase):
             self.assertGreater(qoi[3], 0.0)
             self.assertLess(qoi[3], 1.0)
             self.assertGreater(qoi[4], 0.0)
+        finally:
+            solver.close()
+
+    def test_tet_diffusion_periodic_sphere_returns_symmetric_tensor(self):
+        from porescalemc.solvers.tet import TetDiffusionSolver
+        import numpy as np
+
+        packing = self._single_sphere_packing(radius=0.18)
+        solver = TetDiffusionSolver(mesh_size=0.22, periodic=True, verbosity=0)
+        try:
+            solver.setup(packing)
+            qoi = solver.solve()
+            diag = qoi[:3]
+            diagnostics = solver.diagnostics()
+            self.assertTrue(np.all(np.isfinite(qoi)))
+            self.assertGreater(np.min(diag), 0.0)
+            self.assertLess(np.max(diag), 1.1)
+            self.assertAlmostEqual(diagnostics["D_xy"], diagnostics["D_yx"], places=8)
+            self.assertAlmostEqual(diagnostics["D_xz"], diagnostics["D_zx"], places=8)
+            self.assertAlmostEqual(diagnostics["D_yz"], diagnostics["D_zy"], places=8)
         finally:
             solver.close()
 

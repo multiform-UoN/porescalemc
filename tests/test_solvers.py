@@ -103,6 +103,27 @@ class SolverTests(unittest.TestCase):
         self.assertGreater(result[0], 0.0)
         self.assertLessEqual(result[0], 1.05)
 
+    def test_voxel_fv_flux_uses_periodic_faces(self):
+        from porescalemc.solvers.voxel import (
+            _build_operator,
+            _effective_diffusivity,
+            _face_diffusivities,
+        )
+
+        d = np.ones((6, 4, 3), dtype=float)
+        face = _face_diffusivities(d)
+        spacing = (1.0 / d.shape[0], 1.0 / d.shape[1], 1.0 / d.shape[2])
+        operator = _build_operator(face, spacing, d.shape)
+        np.testing.assert_allclose(operator @ np.ones(d.size), np.zeros(d.size), atol=1e-12)
+
+        x = np.arange(d.shape[0])[:, None, None]
+        periodic_corrector = np.sin(2.0 * np.pi * x / d.shape[0]) * np.ones_like(d)
+        self.assertAlmostEqual(
+            _effective_diffusivity(face, periodic_corrector, spacing, axis=0),
+            1.0,
+            places=12,
+        )
+
     def test_tet_diffusion_soft_dependency_guard(self):
         import porescalemc.solvers.tet as tet_module
 
