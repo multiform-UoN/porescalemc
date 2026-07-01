@@ -30,6 +30,9 @@
 \newcommand{\kvec}{\mathbf{k}}
 \newcommand{\cvec}{\mathbf{c}}
 \newcommand{\bfu}{\mathbf{u}}
+\newcommand{\bff}{\mathbf{f}}
+\newcommand{\bfe}{\mathbf{e}}
+\newcommand{\bfv}{\mathbf{v}}
 \newcommand{\X}{\mathbf{X}}
 \newcommand{\F}{\mathbf{F}}
 \newcommand{\B}{\mathbf{B}}
@@ -464,7 +467,7 @@ $\mathcal{M}^{-1}$ approximates $\mathcal{A}$ by replacing the variable
 coefficient $\phi_s/\eta$ with its mean:
 \begin{equation}
   \mathcal{M}^{-1} r = \mathcal{F}^{-1}\!\left[
-    \frac{\hat{r}(\k)}{4\pi^2 D_0|\k|^2 + \bar{\phi}_s/\eta}
+    \frac{\hat{r}(\kvec)}{4\pi^2 D_0|\kvec|^2 + \bar{\phi}_s/\eta}
   \right].
 \end{equation}
 The effective diffusivity follows from the volume-averaged flux:
@@ -502,10 +505,10 @@ are solved by a Richardson iteration with solenoidal projection:
     \frac{\lambda\hat{\bfu}^n
           - \widehat{(\phi_s/\eta)\bfu^n}
           + \hat{\bff}}
-         {\mu\,4\pi^2|\k|^2 + \lambda}
+         {\mu\,4\pi^2|\kvec|^2 + \lambda}
   \right],
 \end{equation}
-where $P_\text{sol}(\hat\bfv)_k = \hat\bfv_k - (\hat\bfv_k\cdot\hat\k)\hat\k$
+where $P_\text{sol}(\hat\bfv)_k = \hat\bfv_k - (\hat\bfv_k\cdot\hat{\kvec})\hat{\kvec}$
 is the divergence-free projector and $\lambda$ is the Richardson damping
 parameter chosen as
 \begin{equation}
@@ -739,6 +742,11 @@ P.~Angot, C.-H. Bruneau, and P.~Fabrie.
 V.~Monchiet, G.~Bonnet, and G.~Guyader.
 \newblock A polarization-based FFT method for computing the effective properties of materials with complex microstructures.
 \newblock {\em International Journal for Numerical Methods in Engineering}, 93(11):1144--1166, 2013.
+
+\bibitem{Hasimoto1959}
+H.~Hasimoto.
+\newblock Periodic solutions of one-dimensional and three-dimensional Navier-Stokes equations for the flow of viscous fluid through lattices of obstacles.
+\newblock {\em Journal of Fluid Mechanics}, 5(2):317--328, 1959.
 
 \end{thebibliography}
 
