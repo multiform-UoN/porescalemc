@@ -1,0 +1,300 @@
+\PassOptionsToPackage{final}{graphicx}
+\documentclass[preprint,12pt]{elsarticle}
+
+\usepackage[applemac]{inputenc}
+\usepackage[T1]{fontenc}
+
+%% Use the option review to obtain double line spacing
+%% \documentclass[preprint,review,12pt]{elsarticle}
+
+%% Use the options 1p,twocolumn; 3p; 3p,twocolumn; 5p; or 5p,twocolumn
+%% for a journal layout:
+%% \documentclass[final,1p,times]{elsarticle}
+%% \documentclass[final,1p,times,twocolumn]{elsarticle}
+%% \documentclass[final,3p,times]{elsarticle}
+%% \documentclass[final,3p,times,twocolumn]{elsarticle}
+%% \documentclass[final,5p,times]{elsarticle}
+%% \documentclass[final,5p,times,twocolumn]{elsarticle}
+
+\usepackage{amsmath,amssymb,amsthm,amsfonts}
+%\usepackage{mathtools}
+%\mathtoolsset{
+%showonlyrefs=false  %
+%}
+
+
+% Nice tables
+\usepackage{booktabs}
+% \usepackage{tabularx,colortbl}
+\usepackage{dcolumn}% Align table columns on decimal point
+\usepackage{multirow}
+
+\usepackage[ruled]{algorithm2e}
+\usepackage[usenames,dvipsnames,svgnames,table]{xcolor}
+\usepackage[stable]{footmisc}
+
+\usepackage{fullpage,lmodern}
+\usepackage{verbatim}
+
+%% The numcompress package shorten the last page in references.
+%% `nodots' option removes dots from firstnames in references.
+\usepackage[nodots]{numcompress}
+
+%% The lineno packages adds line numbers. Start line numbering with
+%% \begin{linenumbers}, end it with \end{linenumbers}. Or switch it on
+%% for the whole article with \linenumbers after \end{frontmatter}.
+\usepackage{lineno}
+
+%% natbib.sty is loaded by default. However, natbib options can be
+%% provided with \biboptions{...} command. Following options are
+%% valid:
+
+%%   round  -  round parentheses are used (default)
+%%   square -  square brackets are used   [option]
+%%   curly  -  curly braces are used      {option}
+%%   angle  -  angle brackets are used    <option>
+%%   semicolon  -  multiple citations separated by semi-colon
+%%   colon  - same as semicolon, an earlier confusion
+%%   comma  -  separated by comma
+%%   numbers-  selects numerical citations
+%%   super  -  numerical citations as superscripts
+%%   sort   -  sorts multiple citations according to order in ref. list
+%%   sort&compress   -  like sort, but also compresses numerical citations
+%%   compress - compresses without sorting
+%%
+%% \biboptions{comma,round}
+
+% \biboptions{}
+
+
+\journal{Advances in Water Resources}
+
+
+
+% -------------------
+% ---- NOTATION
+% ------------------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\D}{\mathbb{D}}
+\newcommand{\K}{\mathbb{K}}
+\newcommand{\N}{\mathbb{N}}
+%\renewcommand{\vec}[1]{\mathbf{#1}}
+\newcommand{\n}{\mathbf{n}}
+\newcommand{\x}{\mathbf{x}}
+\newcommand{\X}{\mathbf{X}}
+\newcommand{\F}{\mathbf{F}}
+%\newcommand{\E}{\mathbf{E}}
+\newcommand{\B}{\mathbf{B}}
+\newcommand{\J}{\mathbf{J}}
+\newcommand{\qoi}{Q}
+\newcommand{\maxl}{L}
+\newcommand{\suml}{\sum_{\ell=1}^{\maxl}}
+\newcommand{\summ}{\frac{1}{M}\sum_{m=1}^{M}}
+\newcommand{\summl}{\frac{1}{M_{\ell}}\sum_{m=1}^{M_{\ell}}}
+\newcommand{\summz}{\frac{1}{M_{0}}\sum_{m=1}^{M_{0}}}
+\newcommand{\weakrate}{\alpha}
+\newcommand{\strongrate}{\beta}
+\newcommand{\workrate}{\gamma}
+
+\newcommand{\E}[1]{{\ensuremath{\mathrm{E}}\mspace{-2mu}\left[#1\right]}}
+\newcommand{\Prob}[1]{{\ensuremath{\mathrm{P}}\mspace{-2mu}\left(#1\right)}}
+\newcommand{\Var}[1]{{\ensuremath{\mathrm{Var}\!\left( #1 \!\right)}}}
+\newcommand{\AML}{\ensuremath{\mathcal{A\mspace{-2mu}}_{{}_\mathcal{M\mspace{-2mu}L}}\mspace{-7mu}}}
+\newcommand{\AMC}{\ensuremath{\mathcal{A\mspace{-2mu}}_{{}_\mathcal{M\mspace{-2mu}C}}\mspace{-7mu}}}
+\newcommand{\AMLSimple}{\mathcal{A}_{{}_\mathcal{M L}}}
+\newcommand{\VMLSimple}{\mathcal{V}_{{}_\mathcal{M L}}}
+\newcommand{\AMLTriplet}{\mathcal{A}_{{}_\mathcal{H M L}}}
+\newcommand{\VMLTriplet}{\mathcal{V}_{{}_\mathcal{H M L}}}
+\newcommand{\AMLWeighted}{\mathcal{A}_{{}_\mathcal{W M L}}}
+\newcommand{\VMLWeighted}{\mathcal{V}_{{}_\mathcal{W M L}}}
+\newcommand{\tol}{{\ensuremath{\mathrm{TOL}}}}
+\newcommand{\Ce}{{\ensuremath{\xi_\epsilon}}}
+
+\newcommand{\A}[1]{\ensuremath{\mathcal{A}}\left( #1 \right)}
+\newcommand{\V}[1]{\ensuremath{\mathcal{V}\left( #1 \right)}}
+\newcommand{\bfu}{\mathbf{u}}
+
+\newcommand{\abs}[1]{{\left| #1 \right|}}
+\newcommand{\roundUp}[1]{{\left\lceil #1 \right\rceil}}
+\newcommand{\bigO}[1]{{\mathcal{O}}\!\left(#1\right)}
+\newcommand{\Ltwo}[1]{\left\|#1\right\|_2}
+\DeclareMathOperator*{\argmin}{\arg\!\min}
+\newcommand{\red}[1]{\textcolor{red}{#1}}
+
+
+
+\begin{document}
+\graphicspath{{./Figures/}}
+\DeclareGraphicsExtensions{.pdf,.png,.jpg}
+
+
+\begin{frontmatter}
+
+%% Title, authors and addresses
+
+%% use the tnoteref command within \title for footnotes;
+%% use the tnotetext command for the associated footnote;
+%% use the fnref command within \author or \address for footnotes;
+%% use the fntext command for the associated footnote;
+%% use the corref command within \author for corresponding author footnotes;
+%% use the cortext command for the associated footnote;
+%% use the ead command for the email address,
+%% and the form \ead[url] for the home page:
+%%
+%% \title{Title\tnoteref{label1}}
+%% \tnotetext[label1]{}
+%% \author{Name\corref{cor1}\fnref{label2}}
+%% \ead{email address}
+%% \ead[url]{home page}
+%% \fntext[label2]{}
+%% \cortext[cor1]{}
+%% \address{Address\fnref{label3}}
+%% \fntext[label3]{}
+
+\title{On the predictivity of pore-scale simulations: an Uncertainty Quantification approach}
+
+%% use optional labels to link authors explicitly to addresses:
+%% \author[label1,label2]{<author name>}
+%% \address[label1]{<address>}
+%% \address[label2]{<address>}
+
+\author[kaust,ices]{Matteo Icardi}
+\author[poli]{Gianluca Boccardo}
+\author[kaust]{Ra\'ul Tempone}
+
+\address[kaust]{CEMSE, King Abdullah University of Science and Technology, Thuwal, Saudi Arabia}
+\address[poli]{DISAT, Politecnico di Torino, Torino, Italy}
+\address[ices]{ICES, The University of Texas at Austin, USA}
+
+\begin{abstract}
+A fast method with tunable accuracy is proposed to estimate error and uncertainty in pore-scale and Digital Rock Physics (DRP) problems.
+The overall predictivity of these studies can be, in fact, hindered by many factors including sample heterogeneity, computational and imaging limitations, model inadequacy and not perfectly known physical parameters. The typical objective of pore-scale studies is the estimation of macroscopic effective parameters such as permeability, effective diffusivity and hydrodynamic dispersion. However, these are often non-deterministic quantities (i.e., results obtained for specific pore-scale sample and setup are not totally reproducible by another ``equivalent'' sample and setup). The stochastic nature can arise due to the multi-scale heterogeneity, the computational and experimental limitations in considering large samples, and the complexity of the physical models. These approximations, in fact, introduce an error that, being dependent on a large number of complex factors, can be modeled as random. We propose a general simulation tool, based on multilevel Monte Carlo, that can reduce drastically the computational cost needed for computing accurate statistics of effective parameters and other quantities of interest, under any of these random errors. This is, to our knowledge, the first attempt to include Uncertainty Quantification (UQ) in pore-scale physics and simulation. The method can also provide estimates of the discretization error and it is tested on three-dimensional transport problems in heterogeneous materials, where the sampling procedure is done by generation algorithms able to reproduce realistic consolidated and unconsolidated random sphere and ellipsoid packings and arrangements. A totally automatic workflow is developed in an open-source code \citep{git}, that include rigid body physics and random packing algorithms, unstructured mesh discretization, finite volume solvers, extrapolation and post-processing techniques.
+The proposed method can be efficiently used in many porous media applications for problems such as stochastic homogenization/upscaling, propagation of uncertainty from microscopic fluid and rock properties to macro-scale parameters, robust estimation of Representative Elementary Volume size for arbitrary physics.
+\end{abstract}
+
+\begin{keyword}
+pore-scale simulation \sep multilevel Monte Carlo \sep stochastic upscaling \sep uncertainty quantification
+
+\MSC[2010] 76S05  \sep 68T37 \sep   60H15  \sep  65C05
+
+\end{keyword}
+
+\end{frontmatter}
+
+% \linenumbers
+
+%% ------------
+%% SECTION
+%%-------------
+\section{Introduction}
+\label{sec:intro}
+
+\input{intro}
+
+
+
+
+\clearpage
+%% ------------
+%% SECTION
+%%-------------
+\section{Random porous media}
+\label{sec:geometry}
+
+
+\input{geometry}
+
+
+\clearpage
+%% ------------
+%% SECTION
+%%-------------
+\section{Multilevel Monte Carlo}
+\label{sec:mlmc}
+
+\input{mlmc}
+
+
+\clearpage
+%% ------------
+%% SECTION
+%%-------------
+\section{Numerical solvers}
+\label{sec:solver}
+
+\input{solver}
+
+
+\clearpage
+%% ------------
+%% SECTION
+%%-------------
+\section{Examples}
+\label{sec:results}
+
+\input{results}
+
+
+%\clearpage
+%% ------------
+%% SECTION
+%%-------------
+%\section{Discussion}
+%\label{sec:discussion}
+%- SUMMARIZE RESULTS\\
+%- ADD TABLE TO SEE ALL COMPUTATIONAL SAVINGS\\
+%- DISCUSS SOME IMPLEMENTATION DETAILS \\
+%- MENTION WHAT COULD HAPPEN FOR OTHER QOIs-EFFECTIVE PARAMETERS (e.g., multiphase flows)\\
+%
+%\input{discussion}
+
+\clearpage
+%% ------------
+%% SECTION
+%%-------------
+\section{Conclusions}
+\label{sec:conclusions}
+We have proposed a general method to estimate numerical, parametric and sampling errors in pore-scale simulations, based on multilevel Monte Carlo (MLMC). This is achieved by a tolerance-based dynamic estimation of statistics (e.g., mean and variance) of effective parameters of porous media samples. MLMC can explicitly control that the bias (i.e., discretization error) and the statistical error (i.e., the error due to the randomness of the samples) fall below a certain user-defined tolerance.
+
+The method is applicable to a wide range of problems, where some parametrization (explicit or implicit) of the input uncertainty is available. This includes, for example, pre-defined parameter probability distributions (e.g., for fluid or surface properties such as surface tension and contact angle in multiphase flows), or pre-defined procedures to generate random materials that are comparable to the real material under study. The verification of this requirement (that the random parameters or geometry is an actual realizable event in the real system under study) is crucial to the final interpretation and meaning of the statistical estimation performed by our method. It will be addressed in future works and can be approached in an inverse problem framework where similar methodologies (namely Markov Chain Multilevel Monte Carlo \cite{ketelsen2013hierarchical}) can be used.
+
+Considering that the scalability of MLMC (similarly to classical Monte Carlo) comes at almost no cost (by parallelizing on the numbers of fine and coarse realizations, while the scalability of single pore-scale flow simulations is often limited to hundreds of cores), this demonstrates the high potential and feasibility of this uncertainty studies. The parallelization can also be hybridized with fine realizations solved on a number of cores dependent on the refinement levels and multiple realizations solved simultaneously.  As such, with this method is possible to take full advantage of the ever growing availability of HPC resources. A possible limitation of the method is due to the fact that MLMC (as well as other methods used here, like the Aitken extrapolation) is practically applicable only for studying scalar or low-dimensional vector quantities. This limitation is the price to be paid for having detailed statistical information and it is a general aspect of many UQ studies that, by definition, focus on quantitative study of specific quantities of interest (QoI) and need a preliminary well-defined parametrization and definition of the problem. After the numerous works in recent literature in pore-scale physics devoted to the description and definition of computational (or experimental) procedure to compute specific quantities (e.g., effective parameters or more complex quantities such as capillary pressure curves or description of other non-linear effects), it is our opinion that these standard upscaling procedures (to pass from an infinite dimensional representation to a few upscaled representative quantities) have to be benchmarked, validated and applied in a systematic way for a wide range of pore geometries and physical regimes to understand their robustness, predictivity, and general applicability.
+
+With this objective, the proposed approach is, to our knowledge, the first practically applicable method for general Uncertainty Quantification (UQ) studies of problems arising in Digital Rock Physics, where the cost of a na\"\i ve sensitivity analysis is still prohibitive. To some extent and with a few precautions, the method can also be applied for a faster and cheaper estimation of parameters on experimental images, when a high number of samples can be extracted at different resolutions but only a limited amount of them can be performed in high-resolution.
+
+
+The method has been implemented \citep{git} on top of existing open-source software and is to be released open-source together with the full setup of the simulations presented in this work. Future efforts will be directed towards the computation of the full Probability Density Functions (PDF) of effective parameters, following the recent work of \citet{giles2014multi}, and the coupling with other solvers to include more physics (e.g. multiphase and reactive flows) and more type of random materials (fractures and explicit heterogeneity definitions), extending the range of possible analysis to more complex and non-linear properties such as relative permeabilities, effective reaction rates, filtration efficiencies, just to name a few.
+
+
+
+\clearpage
+%% ------------
+%% SECTION
+%%-------------
+\section{Acknowledgments}
+\label{sec:acknow}
+Research reported in this publication was supported by the King Abdullah University of Science and Technology (KAUST). MI and RT were supported by the Academic Excellency Alliance (AEA) UT Austin-KAUST project "Uncertainty quantification for predictive modeling of the dissolution of porous and fractured mediaÓ and by the KAUST SRI Center for Uncertainty Quantification in Computational Science and Engineering. Computational resources for the simulations presented in this publication have been made available by the Texas Advanced Computing Center, KAUST Research Computing and KAUST SuperComputing Lab. MI thanks Siarhei Khirevich for providing the reference results for regular sphere arrangements and for his comments and discussions. GB thanks Rajandrea Sethi and Daniele Marchisio for their support.
+
+%% ------------
+%% APPENDIX
+%%-------------
+ \appendix
+
+\input{appendix}
+
+%% ------------
+%% REFERENCES
+%%-------------
+%% Following citation commands can be used in the body text:
+%% Usage of \cite is as follows:
+%%   \cite{key}          ==>>  [#]
+%%   \cite[chap. 2]{key} ==>>  [#, chap. 2]
+%%   \citet{key}         ==>>  Author [#]
+\section*{References}
+
+\bibliographystyle{model3-num-names}
+\bibliography{awr}
+
+
+\end{document}
+
